@@ -158,7 +158,7 @@ def main() -> None:
 
     modis = read_firms_csv(MODIS_FILE)
     viirs = read_firms_csv(VIIRS_FILE)
-    tables = run_frames([modis, viirs], config, OUTPUT_DIR)
+    tables = run_frames([modis, viirs], config, OUTPUT_DIR, OUTPUT_DIR / "clean_data")
     print_summary(tables)
 
     map_path = OUTPUT_DIR / "validation_map.png"

@@ -24,6 +24,7 @@ import pandas as pd
 
 from fire_etl.config import PipelineConfig
 from fire_etl.confidence import max_fused, max_level
+from fire_etl.energy import event_energy
 from fire_etl.fusion import ObservationResult, short_hash
 from fire_etl.graph import component_labels, self_join_pairs
 
@@ -41,6 +42,10 @@ EVENT_COLUMNS = (
     "frp_total",
     "biomass_total_kg_s",
     "biomass_max_kg_s",
+    "n_passes",
+    "max_pass_gap_hours",
+    "fre_mj",
+    "biomass_burned_kg",
     "confidence_modis",
     "confidence_viirs",
     "confidence_fused",
@@ -308,6 +313,7 @@ def summarize_events(
     events["confidence_viirs"] = by_observation["confidence_viirs"].agg(max_level)
     events["confidence_fused"] = by_observation["confidence_fused"].agg(max_fused)
     events["frp_series"] = _frp_series(observations)
+    events = events.join(event_energy(detections, config.biomass))
 
     hulls = observations[["event_id", "geom_hull"]].dissolve(by="event_id").convex_hull
     events["geom_hull"] = hulls

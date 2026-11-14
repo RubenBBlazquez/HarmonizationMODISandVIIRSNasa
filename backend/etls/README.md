@@ -23,6 +23,8 @@ backend/etls/
 │   ├── fusion.py       # ventanas temporales -> observaciones
 │   ├── events.py       # enlace entre ventanas -> fire_events, ids estables, fusiones
 │   ├── sigpac_land_cover.py  # cobertura del suelo con SIGPAC
+│   ├── frp_classification.py # umbrales de FRP: ruido y clase baja/media/alta
+│   ├── clean_data.py   # datos finales (GeoJSON + JSON) para el mapa y el chatbot
 │   ├── outputs.py      # GeoParquet (EPSG:4326) y lectura del estado previo
 │   └── pipeline.py     # orquestación + CLI
 └── tests/
@@ -50,7 +52,7 @@ filas españolas.
 ```bash
 cd backend/etls
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,viz]"
+pip install -e ".[dev,viz]"     # o, sin instalar el paquete: pip install -r requirements.txt
 
 # Pipeline sobre los ficheros de muestra
 fire-etl --config config/default.yaml \
@@ -128,11 +130,50 @@ multiplicando por la duración efectiva entre pasadas. Las observaciones y los e
 incluyen `biomass_total_kg_s` (suma) y `biomass_max_kg_s` (máximo), y cada entrada de
 `frp_series` añade `biomass_total_kg_s`. El coeficiente usado queda en `params`.
 
-## Salidas (`output/`)
+## Datos finales: `clean_data/`
+
+Es lo que consumen el **mapa** y el **chatbot**: el resultado ya depurado, sin columnas del
+algoritmo ni detecciones que no pertenezcan a un evento. Se genera en cada ejecución
+(`output.clean_data_directory`, por defecto `clean_data/`).
+
+| Fichero | Para | Contenido |
+|---|---|---|
+| `fire_events.geojson` | mapa | un punto (centroide) por evento, con sus propiedades |
+| `fire_event_areas.geojson` | mapa | envolvente (polígono) de cada evento |
+| `fire_detections.geojson` | mapa | detecciones de los eventos (puntos) |
+| `fire_events.json` | chatbot | ficha plana por evento + `summary` en castellano + `frp_series` |
+| `metadata.json` | ambos | fecha de generación, recuentos, parámetros, fuentes y avisos |
+
+Propiedades de cada evento: `event_id`, `status` (`active`/`closed`), `first_detection`,
+`last_detection`, `duration_hours`, `lat`, `lon`, `n_detections`, `sensors`, `frp_max_mw`,
+`frp_category` (`baja`/`media`/`alta`), `biomass_max_kg_s`, `confidence`, `footprint_area_km2`,
+`land_cover`, `is_agricultural`, `is_forest` y `summary`. Fechas en UTC
+(`2026-11-14T02:15:00Z`), coordenadas en EPSG:4326 (`[lon, lat]` en GeoJSON) y nulos como `null`.
+
+**Qué se considera ruido y no llega aquí:**
+- Detecciones por debajo del FRP mínimo de su instrumento y de día/noche (VIIRS: 15 MW de día y
+  6 MW de noche; MODIS: 30 y 12). **No se descartan, se marcan**: en `output/detections.parquet`
+  llevan `is_valid = false` y `skip_reason = "below_frp_threshold"` (en las demás,
+  `is_valid = true` y `skip_reason = null`). Se saltan en las observaciones y los eventos. Los
+  umbrales están en `fire_etl/frp_classification.py` y se desactivan con
+  `validation.apply_frp_thresholds: false`. El número de marcadas queda en
+  `run_parameters.json` como `skipped_detections`.
+- Observaciones `low` aisladas (un solo sensor y confianza baja).
+- Detecciones fuera de España.
+
+`footprint_area_km2` es la huella de los píxeles más el buffer, **no superficie quemada**, y
+`biomass_max_kg_s` es una tasa (kg/s), no una masa total.
+
+## Tablas completas (`output/`)
+
+`output/` conserva todo el detalle del algoritmo (observaciones, relación evento-detección,
+fusiones, parámetros) y el estado que usa el pipeline para mantener los `event_id` estables
+entre ejecuciones. No es para consumir directamente: usa `clean_data/`.
+
 
 | Fichero | Contenido | Geometrías (EPSG:4326) |
 |---|---|---|
-| `detections.parquet` | detecciones + `observation_id`, `is_representative`, `footprint_area_m2` | `geom_point`, `geom_footprint` |
+| `detections.parquet` | todas las detecciones + `is_valid`, `skip_reason`, `observation_id`, `is_representative`, `footprint_area_m2` | `geom_point`, `geom_footprint` |
 | `observations.parquet` | una fila por observación + `event_id` | `geom_centroid`, `geom_hull` |
 | `fire_events.parquet` | eventos consolidados | `geom_centroid`, `geom_hull` |
 | `event_detections.parquet` | relación evento ↔ detección ↔ observación | — |
@@ -155,6 +196,63 @@ Se usa GeoParquet porque GeoPackage solo admite una geometría por capa.
 - El estado previo se guarda en ficheros. Si se cambian los parámetros entre ejecuciones, los
   ids se conservan, pero el contenido de los eventos puede cambiar.
 
+## Descarga de datos: archivo anual (2000 → último año completo) + NRT (año en curso)
+
+Hay dos fuentes de NASA FIRMS, que se descargan con `scripts/download_firms.py` (o desde
+`scripts/run_pipeline.py`):
+
+| Fuente | Cubre | Token | Dónde queda |
+|---|---|---|---|
+| **Archivo anual** por país y año (ya recortado a España) | del 2000 al último año **completo** | no | `data/raw/*.csv` |
+| **NRT** (casi tiempo real, toda Europa, se recorta a España al procesar) | **solo los últimos ~60 días** | **sí** | `data/raw/nrt/*.txt` |
+
+### Archivo anual (sin token)
+
+| Fuente (`download.sources`) | Años |
+|---|---|
+| `modis` (Aqua + Terra) | 2000 – 2025 |
+| `viirs-snpp` | 2012 – 2025 |
+| `viirs-jpss1` (NOAA-20) | 2018 – 2025 |
+
+- Ruta: `<base_url>/<fuente>/<año>/<fuente>_<año>_Spain.csv`; todo editable en la sección
+  `download` de `config/default.yaml`. Idempotente y atómico (`.part` + renombrado).
+- **Nunca descarga el año en curso**: el archivo anual solo existe para años completos. Aunque se
+  ponga `download.end_year` en el año actual, se recorta al último año completo y se avisa.
+- Los ficheros anuales llaman `Aqua` / `Terra` a los satélites MODIS; `validation.satellite_aliases`
+  los unifica con los `A` / `T` de los NRT para que el `detection_id` no duplique detecciones.
+
+### NRT del año en curso (con token)
+
+- Carpetas: `https://nrt3.modaps.eosdis.nasa.gov/archive/FIRMS/<fuente>/Europe/` para `modis-c6.1`,
+  `suomi-npp-viirs-c2`, `noaa-20-viirs-c2` y `noaa-21-viirs-c2` (sección `nrt` del YAML). Un fichero
+  por día (`..._NRT_AAAADDD.txt`, con el día del año).
+- El **listado** es público, pero **cada fichero exige un token de Earthdata**. El token **nunca**
+  va en el YAML, en el código ni en git (el repo tiene remoto en GitHub). Se lee, por orden, de:
+  1. la variable de entorno `EARTHDATA_TOKEN` (el nombre se configura con `nrt.token_env`);
+  2. el fichero local `backend/etls/.secrets/earthdata_token` (una línea; la carpeta `.secrets/`
+     está en `.gitignore`; se crea con permisos solo para el usuario):
+
+  ```bash
+  mkdir -p .secrets && chmod 700 .secrets
+  printf '%s\n' '<tu-token>' > .secrets/earthdata_token && chmod 600 .secrets/earthdata_token
+  python scripts/download_firms.py
+  ```
+
+- Sin token se omite el NRT y se avisa. Si el servidor rechaza el token (caducado o no válido) se
+  detiene sin seguir la redirección al login, así que el token no se envía a ningún otro servidor.
+- Los ficheros de los últimos `nrt.refetch_days` (2) días se **vuelven a bajar siempre**, porque
+  crecen durante el día; los más antiguos, una vez bajados, no. La primera descarga tarda unos
+  minutos (≈ 230 ficheros); las siguientes, segundos.
+- Los NRT son provisionales (NASA los sustituye luego por el procesamiento estándar).
+
+### ⚠️ Hueco sin cubrir
+
+El archivo anual acaba el 31-dic del último año completo y el NRT solo guarda ~60 días, así que
+**lo que queda entre ambos no lo cubre ninguna fuente**. A 14-nov-2026 son los **257 días del
+01-01-2026 al 14-09-2026**. `download_firms.py` lo calcula y lo avisa al terminar. Opciones: la API
+de FIRMS (requiere una `MAP_KEY` gratuita; se pide por tramos de pocos días) o esperar a que
+publiquen el fichero anual de 2026 (en enero de 2027).
+
 ## Uso rápido (sin parámetros)
 
 Los scripts de `scripts/` no usan argumentos de línea de comandos: se editan las constantes del
@@ -175,7 +273,71 @@ tables = run_frames([df_modis, df_viirs])   # DataFrames FIRMS crudos, en cualqu
 tables.events, tables.observations, tables.detections
 ```
 
+## Qué cuenta como incendio, duración y biomasa
+
+**Fuentes que no son incendios de vegetación** (se *marcan* con `is_valid = false` y `skip_reason`;
+no entran en observaciones ni eventos):
+
+| `skip_reason` | Origen |
+|---|---|
+| `below_frp_threshold` | FRP por debajo del mínimo del instrumento (`frp_classification.py`) |
+| `static_land_source`, `active_volcano`, `offshore_detection` | campo `type` de FIRMS (2, 1 y 3; solo en los ficheros anuales). `type 0` = incendio de vegetación |
+| `volcanic_eruption` | `validation.exclusion_zones`: zona y fechas configuradas |
+
+`type` **no** separa todo: la erupción de La Palma (2021) está clasificada casi entera como `type 0`
+(el 98,7 % de sus detecciones), por eso hay una zona de exclusión configurable
+(`validation.exclusion_zones`, con `bbox`, fechas y motivo). Se incluye la de La Palma; añade otras
+del mismo modo. Si varios motivos coinciden, manda el de fuente sobre el FRP bajo. Se desactiva con
+`validation.apply_source_filters: false`.
+
+**Duración** = tiempo entre la primera y la última detección de satélite de un incendio. Es un
+mínimo: el fuego empieza antes de la primera pasada y sigue después de la última. Un incendio visto
+en una sola pasada se muestra como "visto en 1 pasada" (no "0 h"). `n_passes` y
+`max_pass_gap_hours` (mayor hueco entre pasadas) indican cuánta confianza tiene ese dato.
+
+**Biomasa quemada (estimación)**, `biomass_burned_kg` (en `clean_data`, `biomass_burned_t`):
+1. Las detecciones de un evento a menos de `biomass.pass_gap_minutes` (30) forman una **pasada**.
+2. El FRP de la pasada es la suma de sus detecciones; si MODIS y VIIRS ven lo mismo en la misma
+   pasada se toma el mayor, no la suma.
+3. Cada pasada representa hasta `biomass.pass_window_hours` (6) horas, repartidas a la mitad con la
+   pasada vecina. FRE (MJ) = Σ FRP(pasada) × horas × 3600.
+4. Biomasa = FRE × `biomass.coefficient_kg_per_mj` (0,368).
+
+Supone el FRP constante en cada ventana, ignora el ciclo diario del fuego y no incluye lo que los
+satélites no ven (fuegos pequeños, nubes, humo): sirve para **comparar incendios**, no como medida
+exacta. Con datos reales, la Sierra de la Culebra (2022) sale en ≈ 100.000 t. La tasa instantánea
+`biomass_max_kg_s` (kg/s) es otra cosa: no es una masa.
+
+## Carga de recintos SIGPAC en PostGIS
+
+El FEGA publica un `.zip` por provincia (con un `.gpkg`, capa `recinto`) en
+<https://sigpac-hubcloud.es/html/sdsigpac/descargas/exploradorArchivos.html?path=2026%2Frecintos%2F>.
+`scripts/load_sigpac.py` lista los 50 zips de esa URL (`SIGPAC_BASE_URL`, en `sigpac_loader.py`) y los
+procesa **de uno en uno**: descarga, descomprime, lee con geopandas por bloques, reproyecta a
+EPSG:4326, carga en `fire.sigpac_recintos` y borra zip y `.gpkg`. No necesita parámetros:
+
+```bash
+python scripts/load_sigpac.py                  # descarga y carga todas las provincias
+python scripts/load_sigpac.py --only 20 28     # solo algunas (código INE)
+python scripts/load_sigpac.py data/sigpac/     # zips locales en vez de descargar
+```
+
+Otras opciones: `--force`, `--keep-zips`, `--download-dir`, `--work-dir`. Los zips se bajan a
+`data/sigpac/` (ignorado por git). Son ~34 GB en total, pero solo hay uno en disco a la vez.
+- Cada provincia se sustituye en una transacción (si falla, queda como estaba).
+- `fire.sigpac_loads` registra los zips cargados: se saltan al repetir (`--force` los recarga).
+- Se guarda el uso original (`uso_sigpac`) y su normalización (`land_cover`), más superficie,
+  altitud, pendiente, etc. Para enriquecer: `ST_Intersects`/`ST_Within` de un punto con `geom`.
+- Cada zip descomprimido ocupa ~2x (Guipúzcoa: 118 MB -> 240 MB; las provincias grandes, varios GB);
+  `--work-dir` elige dónde descomprimir.
+
 ## Cobertura del suelo con SIGPAC
+
+> **Si `land_cover`, `land_cover_confidence`, `sigpac_uso`, `is_agricultural` e `is_forest` salen
+> vacíos es porque este paso está desactivado** (`land_cover.sigpac_dir: null`) **o porque no hay
+> recintos SIGPAC en disco.** No los descarga el pipeline: hay que bajarlos del FEGA, descomprimirlos
+> y apuntar `sigpac_dir` a esa carpeta. Con el paso desactivado el pipeline lo avisa en el log
+> (`Cobertura del suelo desactivada`) y las columnas ni se crean.
 
 Paso opcional del pipeline principal: si `land_cover.sigpac_dir` apunta a una carpeta con los
 recintos SIGPAC (`.shp` / `.gpkg` descargados del FEGA; no se descargan), cada detección recibe

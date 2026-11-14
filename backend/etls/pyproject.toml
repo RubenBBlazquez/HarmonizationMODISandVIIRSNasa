@@ -15,6 +15,7 @@ dependencies = [
     "scipy>=1.11",
     "pyarrow>=14",
     "PyYAML>=6.0",
+    "psycopg[binary]>=3.1",
 ]
 
 [project.optional-dependencies]

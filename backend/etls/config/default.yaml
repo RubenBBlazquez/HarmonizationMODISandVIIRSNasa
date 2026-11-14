@@ -23,6 +23,29 @@ validation:
   track_km_range: [0.1, 10.0]
   frp_min: 0.0
   allowed_daynight: [D, N]
+  # Marca como no válidas (is_valid=false, skip_reason="below_frp_threshold") las detecciones por
+  # debajo del FRP mínimo por instrumento y día/noche (umbrales editables en
+  # fire_etl/frp_classification.py). No se descartan: se conservan en detections.parquet pero no
+  # entran en observaciones, eventos ni clean_data.
+  apply_frp_thresholds: true
+  # Nombres de satélite que se unifican con los NRT (el archivo anual usa Aqua / Terra).
+  satellite_aliases: {Aqua: A, Terra: T}
+  # Detecciones que no son incendios de vegetación: se MARCAN (is_valid=false) con skip_reason, no
+  # se descartan. El campo `type` de FIRMS solo viene en los ficheros anuales: 0 = incendio de
+  # vegetación; el resto se marca con el motivo indicado.
+  apply_source_filters: true
+  non_wildfire_types:
+    1: active_volcano
+    2: static_land_source
+    3: offshore_detection
+  # Zonas y fechas con fuentes térmicas que `type` no separa (casi todo se clasifica como incendio
+  # de vegetación). bbox = [min_lon, min_lat, max_lon, max_lat]; fechas incluidas.
+  exclusion_zones:
+    - name: erupcion_la_palma_2021
+      bbox: [-18.00, 28.52, -17.82, 28.68]
+      start: 2021-09-19
+      end: 2021-12-31
+      reason: volcanic_eruption
 
 confidence:
   # MODIS: confianza numérica 0-100 -> low/nominal/high.
@@ -45,6 +68,11 @@ confidence:
 biomass:
   # Biomasa consumida por energía radiada (kg/MJ). FRP (MW = MJ/s) * coeficiente = kg/s.
   coefficient_kg_per_mj: 0.368
+  # Biomasa quemada de un incendio = energía radiada (FRP integrado en el tiempo) x coeficiente.
+  # Cada pasada de satélite representa como mucho `pass_window_hours` horas (se reparte a la mitad
+  # con la pasada vecina). Detecciones a menos de `pass_gap_minutes` son de la misma pasada.
+  pass_gap_minutes: 30
+  pass_window_hours: 6
 
 geometry:
   # CRS métrico para TODOS los cálculos de distancia/área. EPSG:25830 (ETRS89 / UTM 30N, el
@@ -73,8 +101,58 @@ events:
 
 output:
   directory: output
+  # Datos finales depurados (GeoJSON para el mapa, JSON para el chatbot).
+  clean_data_directory: clean_data
   # Reutiliza las salidas previas del directorio como estado (event_id estable + idempotencia).
   use_previous_state: true
+
+database:
+  # Inserta las tablas completas en PostGIS además de escribir los GeoParquet. El GeoParquet es
+  # el respaldo: si la base de datos falla, se registra el error y el pipeline continúa.
+  # Cada carga sustituye el contenido de las tablas por la foto actual (igual que output/).
+  enabled: true
+  # URL de conexión fija: PostGIS del docker-compose (usuario y clave de desarrollo local).
+  url: postgresql://fires:fires@localhost:5432/fires
+  # Reaplica backend/databases/postgis/init/01_schema.sql (idempotente) antes de cada carga.
+  apply_schema: true
+
+download:
+  # Archivo público de FIRMS por país y año (sin cuenta ni token): un CSV anual ya recortado a
+  # España. Ruta: <base_url>/<fuente>/<año>/<fuente>_<año>_<país>.csv
+  base_url: https://firms.modaps.eosdis.nasa.gov/data/country
+  country: Spain
+  # Fuente -> primer año con datos: MODIS desde nov-2000, VIIRS S-NPP desde 2012, NOAA-20 (jpss1)
+  # desde 2018.
+  sources:
+    modis: 2000
+    viirs-snpp: 2012
+    viirs-jpss1: 2018
+  start_year: 2000
+  end_year: null # null = último año completo (el año en curso todavía no está en el archivo)
+  directory: data/raw
+  timeout_s: 60
+  retries: 3
+  retry_wait_s: 2
+
+nrt:
+  # Datos casi en tiempo real (NRT) de FIRMS para el año en curso: el archivo anual solo llega al
+  # último año completo y el NRT guarda los últimos ~60 días. Los ficheros están en
+  # <base_url>/<fuente>/<región>/ y requieren un token de Earthdata.
+  enabled: true
+  base_url: https://nrt3.modaps.eosdis.nasa.gov/archive/FIRMS
+  region: Europe
+  sources: [modis-c6.1, suomi-npp-viirs-c2, noaa-20-viirs-c2, noaa-21-viirs-c2]
+  # El token NUNCA se escribe en este fichero. Se lee, por orden, de:
+  #   1. la variable de entorno cuyo NOMBRE indica token_env (export EARTHDATA_TOKEN=...), o
+  #   2. el fichero local token_file (una línea; ignorado por git; ruta relativa a etls/).
+  token_env: EARTHDATA_TOKEN
+  token_file: .secrets/earthdata_token
+  directory: data/raw/nrt
+  # Los ficheros de los últimos días crecen durante el día: se vuelven a bajar siempre.
+  refetch_days: 2
+  timeout_s: 60
+  retries: 3
+  retry_wait_s: 2
 
 land_cover:
   # Carpeta con los recintos SIGPAC descargados del FEGA (.shp / .gpkg). null = sin enriquecer.

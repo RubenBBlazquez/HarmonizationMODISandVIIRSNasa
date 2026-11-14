@@ -17,16 +17,20 @@ superficie quemada: es la huella de los píxeles detectados más el buffer.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
 import pandas as pd
+import pyarrow.parquet as pq
 
 from fire_etl.events import MERGE_COLUMNS, PreviousState
 from fire_etl.ingest import DETECTION_COLUMNS
 from fire_etl.sigpac_land_cover import NEW_COLUMNS as LAND_COVER_COLUMNS
+
+LOGGER = logging.getLogger(__name__)
 
 DETECTIONS_FILE = "detections.parquet"
 OBSERVATIONS_FILE = "observations.parquet"
@@ -150,6 +154,16 @@ def read_previous_state(directory: str | Path) -> PreviousState | None:
     output = Path(directory)
     required = (DETECTIONS_FILE, EVENTS_FILE, EVENT_DETECTIONS_FILE)
     if not all((output / name).exists() for name in required):
+        return None
+
+    stored_columns = set(pq.read_schema(output / DETECTIONS_FILE).names)
+    missing = set(DETECTION_COLUMNS) - stored_columns
+    if missing:
+        LOGGER.warning(
+            "El estado previo en %s tiene un esquema antiguo (faltan %s): se ignora.",
+            output,
+            sorted(missing),
+        )
         return None
 
     detections = pd.read_parquet(output / DETECTIONS_FILE, columns=list(DETECTION_COLUMNS))

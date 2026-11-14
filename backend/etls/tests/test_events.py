@@ -95,8 +95,9 @@ def test_isolated_low_observations_are_flagged_and_excluded(config):
 def test_pipeline_is_idempotent_on_same_files(config, tmp_path):
     inputs = [MODIS_SAMPLE, VIIRS_SAMPLE]
 
-    first = pipeline.run(inputs, config, tmp_path)
-    second = pipeline.run(inputs, config, tmp_path)
+    clean_dir = tmp_path / "clean_data"
+    first = pipeline.run(inputs, config, tmp_path, clean_dir)
+    second = pipeline.run(inputs, config, tmp_path, clean_dir)
 
     assert len(second.detections) == len(first.detections) == 40
     assert second.detections["detection_id"].is_unique

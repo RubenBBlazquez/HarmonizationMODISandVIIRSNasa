@@ -7,9 +7,9 @@ services:
     container_name: harmonization-postgis
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-fires}
-      POSTGRES_USER: ${POSTGRES_USER:-fires}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en backend/databases/.env}
+      POSTGRES_DB: fires
+      POSTGRES_USER: fires
+      POSTGRES_PASSWORD: fires
     ports:
       # Solo accesible desde la propia máquina.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"

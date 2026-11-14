@@ -278,10 +278,13 @@ def build_observations(
     observations = observations.join(levels).join(_fused_columns(levels, confidence))
     observations = observations.join(_representatives(detections))
 
+    # Las operaciones geométricas se hacen sobre GeoSeries: una columna extraída de un DataFrame
+    # normal es una Series sin ``.area``.
     union = detections[["_label", "geom_footprint"]].dissolve(by="_label").geometry
+    hulls = union.convex_hull
     observations["footprint_area_m2"] = union.area
-    observations["geom_hull"] = union.convex_hull
-    observations["hull_area_m2"] = observations["geom_hull"].area
+    observations["geom_hull"] = hulls
+    observations["hull_area_m2"] = hulls.area
     observations["geom_centroid"] = gpd.GeoSeries(
         gpd.points_from_xy(observations["_x"], observations["_y"]),
         index=observations.index,

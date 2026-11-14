@@ -17,8 +17,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from fire_etl.config import PipelineConfig, ValidationConfig
+from fire_etl.config import ExclusionZone, PipelineConfig, ValidationConfig
 from fire_etl.confidence import normalize_modis_confidence, normalize_viirs_confidence
+from fire_etl.frp_classification import CATEGORIA_DESCARTADO, clasificar_frp
 
 LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +54,10 @@ DETECTION_COLUMNS = (
     "track",
     "frp",
     "biomass_kg_s",
+    "frp_clase",
+    "frp_categoria",
+    "is_valid",
+    "skip_reason",
     "daynight",
     "confidence_raw",
     "confidence_norm",
@@ -62,6 +67,7 @@ DETECTION_COLUMNS = (
 )
 
 COORDINATE_DECIMALS = 5
+BELOW_FRP_REASON = "below_frp_threshold"
 
 
 class Source(StrEnum):
@@ -228,7 +234,8 @@ def normalize_firms(raw: pd.DataFrame, config: PipelineConfig) -> pd.DataFrame:
 
     normalized = pd.DataFrame(index=raw.index)
     normalized["source"] = source.value
-    normalized["satellite"] = raw["satellite"].astype("string").str.strip()
+    satellite = raw["satellite"].astype("string").str.strip()
+    normalized["satellite"] = satellite.replace(config.validation.satellite_aliases)
     normalized["acq_datetime"] = parse_acq_datetime(raw["acq_date"], raw["acq_time"])
     normalized["acq_date"] = normalized["acq_datetime"].dt.date
     normalized["lat"] = pd.to_numeric(raw["latitude"], errors="coerce")
@@ -255,8 +262,53 @@ def normalize_firms(raw: pd.DataFrame, config: PipelineConfig) -> pd.DataFrame:
 
     version = raw["version"] if "version" in raw else pd.Series(pd.NA, index=raw.index)
     normalized["version"] = version.astype("string")
+    # ``type`` solo viene en los ficheros anuales (no en los NRT): sirve para marcar, no se guarda.
+    firms_type = raw["type"] if "type" in raw else pd.Series(np.nan, index=raw.index)
+    normalized["firms_type"] = pd.to_numeric(firms_type, errors="coerce")
 
     return normalized
+
+
+def _in_zone(detections: pd.DataFrame, zone: ExclusionZone) -> pd.Series:
+    min_lon, min_lat, max_lon, max_lat = zone.bbox
+    inside = detections["lon"].between(min_lon, max_lon) & detections["lat"].between(
+        min_lat, max_lat
+    )
+    if zone.start is not None:
+        inside &= detections["acq_date"] >= zone.start
+
+    if zone.end is not None:
+        inside &= detections["acq_date"] <= zone.end
+
+    return inside
+
+
+def source_skip_reasons(detections: pd.DataFrame, rules: ValidationConfig) -> pd.Series:
+    """
+    Motivo por el que una detección no es un incendio de vegetación (``None`` si lo es).
+
+    Primero manda el ``type`` de FIRMS (volcán, fuente estática, mar) y después las zonas de
+    exclusión configuradas.
+
+    Parameters
+    ----------
+    detections : pd.DataFrame
+        Detecciones normalizadas, con ``firms_type``, ``lat``, ``lon`` y ``acq_date``.
+    rules : ValidationConfig
+        Tipos y zonas de exclusión.
+
+    Returns
+    -------
+    pd.Series
+        Motivo por fila (objeto, ``None`` si no se marca).
+    """
+    by_type = detections["firms_type"].map(rules.non_wildfire_types).astype("object")
+    reasons = by_type.where(by_type.notna(), None)
+    for zone in rules.exclusion_zones:
+        free = reasons.isna() & _in_zone(detections, zone)
+        reasons = reasons.mask(free, zone.reason)
+
+    return reasons
 
 
 def invalid_reasons(detections: pd.DataFrame, rules: ValidationConfig) -> pd.Series:
@@ -332,11 +384,31 @@ def ingest_frames(raw_frames: Iterable[pd.DataFrame], config: PipelineConfig) ->
     discards.append(summarize_discards(valid["source"], duplicated.map({True: "duplicate"})))
     valid = valid[~duplicated]
 
+    valid = clasificar_frp(valid, col_instrumento="source")
+    noise = valid["frp_categoria"] == CATEGORIA_DESCARTADO
+    if not config.validation.apply_frp_thresholds:
+        noise = pd.Series(False, index=valid.index)
+
+    not_wildfire = pd.Series(None, index=valid.index, dtype="object")
+    if config.validation.apply_source_filters:
+        not_wildfire = source_skip_reasons(valid, config.validation)
+
+    # No se descartan: se marcan y los pasos siguientes las saltan (is_valid / skip_reason).
+    # Si hay varios motivos, manda el de fuente (volcán, industria, mar) sobre el FRP bajo.
+    frp_reason = pd.Series(
+        np.where(noise, BELOW_FRP_REASON, None), index=valid.index, dtype="object"
+    )
+    skip_reason = not_wildfire.where(not_wildfire.notna(), frp_reason)
+    valid["is_valid"] = skip_reason.isna()
+    valid["skip_reason"] = skip_reason
+    for reason, count in skip_reason.value_counts().items():
+        LOGGER.info("Detecciones marcadas como no válidas (%s): %s", reason, count)
+
     discarded = pd.concat(discards, ignore_index=True)
     for row in discarded.itertuples(index=False):
         LOGGER.warning("Descartadas %s filas %s: %s", row.count, row.source, row.reason)
 
-    LOGGER.info("Detecciones válidas: %s", len(valid))
+    LOGGER.info("Detecciones ingeridas (válidas o marcadas): %s", len(valid))
     detections = valid.loc[:, list(DETECTION_COLUMNS)].sort_values(
         ["acq_datetime", "detection_id"], ignore_index=True
     )

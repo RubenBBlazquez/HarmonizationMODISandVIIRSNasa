@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -106,4 +107,7 @@ def ingest_rows(
 
 @pytest.fixture
 def config() -> PipelineConfig:
-    return PipelineConfig()
+    """Configuración por defecto sin el filtro de FRP (las filas sintéticas usan FRP bajos)."""
+    base = PipelineConfig()
+
+    return replace(base, validation=replace(base.validation, apply_frp_thresholds=False))

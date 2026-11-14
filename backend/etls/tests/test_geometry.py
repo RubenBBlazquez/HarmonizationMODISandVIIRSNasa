@@ -58,7 +58,7 @@ def test_auto_metric_crs_uses_utm_zone_of_reference():
 
     assert crs.to_epsg() == 32629
     assert utm_crs_for_lon_lat(3.8, 51.2).to_epsg() == 32631
-    assert utm_crs_for_lon_lat(-60.0, -10.0).to_epsg() == 32720
+    assert utm_crs_for_lon_lat(-57.0, -10.0).to_epsg() == 32721  # hemisferio sur, zona 21
 
 
 def test_geographic_crs_is_rejected_for_calculations():

@@ -9,7 +9,7 @@ subconjunto de claves con :func:`load_config`.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -72,6 +72,50 @@ class AreaOfInterestConfig:
 
 
 @dataclass(frozen=True)
+class ExclusionZone:
+    """
+    Zona y fechas con fuentes térmicas que no son incendios forestales (p. ej. una erupción).
+
+    Las detecciones dentro del recuadro y de las fechas se marcan como no válidas (no se
+    descartan) con ``skip_reason = reason``.
+
+    Attributes
+    ----------
+    name : str
+        Nombre descriptivo (solo para el registro).
+    bbox : tuple[float, float, float, float]
+        ``(min_lon, min_lat, max_lon, max_lat)`` en EPSG:4326.
+    start, end : date | None
+        Fechas UTC, ambas incluidas; ``None`` = sin límite por ese lado.
+    reason : str
+        Valor de ``skip_reason`` de las detecciones marcadas.
+    """
+
+    name: str
+    bbox: tuple[float, float, float, float]
+    start: date | None = None
+    end: date | None = None
+    reason: str = "excluded_zone"
+
+    def __post_init__(self) -> None:
+        if len(self.bbox) != 4:
+            raise InvalidConfigError(f"exclusion_zones[{self.name}].bbox debe tener 4 valores")
+
+        object.__setattr__(self, "bbox", tuple(float(value) for value in self.bbox))
+        for field_name in ("start", "end"):
+            value = getattr(self, field_name)
+            if isinstance(value, str):
+                object.__setattr__(self, field_name, date.fromisoformat(value))
+
+        if self.start and self.end and self.start > self.end:
+            raise InvalidConfigError(f"exclusion_zones[{self.name}]: start posterior a end")
+
+
+def _default_non_wildfire_types() -> dict[int, str]:
+    return {1: "active_volcano", 2: "static_land_source", 3: "offshore_detection"}
+
+
+@dataclass(frozen=True)
 class ValidationConfig:
     """Rangos válidos de los campos de entrada."""
 
@@ -81,6 +125,30 @@ class ValidationConfig:
     track_km_range: tuple[float, float] = (0.1, 10.0)
     frp_min: float = 0.0
     allowed_daynight: tuple[str, ...] = ("D", "N")
+    # Marca como no válidas (is_valid=False, skip_reason="below_frp_threshold") las detecciones por
+    # debajo del FRP mínimo de su instrumento y de día/noche (umbrales en
+    # ``fire_etl/frp_classification.py``). No se descartan, pero se saltan en el resto del flujo.
+    apply_frp_thresholds: bool = True
+    # Nombres de satélite que se unifican con los de los ficheros NRT (el archivo anual usa
+    # "Aqua" / "Terra"; los NRT, "A" / "T"), para que el detection_id no duplique detecciones.
+    satellite_aliases: dict[str, str] = field(
+        default_factory=lambda: {"Aqua": "A", "Terra": "T"}
+    )
+    # Marca como no válidas las detecciones que no son incendios de vegetación: el campo ``type``
+    # de FIRMS (solo en los ficheros anuales) distingue 0 = incendio de vegetación presunto de
+    # 1 = volcán activo, 2 = fuente terrestre estática (industria) y 3 = detección en el mar.
+    apply_source_filters: bool = True
+    non_wildfire_types: dict[int, str] = field(default_factory=_default_non_wildfire_types)
+    # Zonas y fechas concretas que no son incendios forestales y que ``type`` no separa (p. ej. la
+    # erupción de La Palma de 2021, clasificada casi toda como incendio de vegetación).
+    exclusion_zones: tuple[ExclusionZone, ...] = ()
+
+    def __post_init__(self) -> None:
+        zones = tuple(
+            zone if isinstance(zone, ExclusionZone) else ExclusionZone(**zone)
+            for zone in self.exclusion_zones
+        )
+        object.__setattr__(self, "exclusion_zones", zones)
 
 
 @dataclass(frozen=True)
@@ -130,13 +198,23 @@ class BiomassConfig:
     coefficient_kg_per_mj : float
         Biomasa consumida por unidad de energía radiada (kg/MJ). Como el FRP está en MW
         (= MJ/s), ``FRP * coeficiente`` da una **tasa de combustión de biomasa en kg/s**.
+    pass_gap_minutes : float
+        Detecciones de un evento separadas menos de este tiempo son de la misma pasada de satélite.
+    pass_window_hours : float
+        Horas que se supone que representa una pasada (como máximo; se reparte a la mitad con la
+        pasada vecina) al integrar el FRP en el tiempo para estimar la biomasa quemada.
     """
 
     coefficient_kg_per_mj: float = 0.368
+    pass_gap_minutes: float = 30.0
+    pass_window_hours: float = 6.0
 
     def __post_init__(self) -> None:
         if self.coefficient_kg_per_mj <= 0:
             raise InvalidConfigError("biomass.coefficient_kg_per_mj debe ser > 0")
+
+        if self.pass_gap_minutes <= 0 or self.pass_window_hours <= 0:
+            raise InvalidConfigError("biomass: pass_gap_minutes y pass_window_hours deben ser > 0")
 
 
 @dataclass(frozen=True)
@@ -194,7 +272,133 @@ class OutputConfig:
     """Destino de las salidas."""
 
     directory: str = "output"
+    # Datos finales depurados para el mapa y el chatbot (GeoJSON + JSON).
+    clean_data_directory: str = "clean_data"
     use_previous_state: bool = True
+
+
+@dataclass(frozen=True)
+class DatabaseConfig:
+    """
+    Carga de las tablas del pipeline en PostGIS (además de los GeoParquet).
+
+    Attributes
+    ----------
+    enabled : bool
+        Si es ``True``, inserta las tablas tras escribir los ficheros.
+    url : str | None
+        URL de conexión fija (PostgreSQL/PostGIS del ``docker-compose.yml``, solo desarrollo
+        local).
+    apply_schema : bool
+        Reaplica el esquema SQL (idempotente) antes de cada carga.
+    """
+
+    enabled: bool = False
+    url: str | None = "postgresql://fires:fires@localhost:5432/fires"
+    apply_schema: bool = True
+
+
+def _default_download_sources() -> dict[str, int]:
+    return {"modis": 2000, "viirs-snpp": 2012, "viirs-jpss1": 2018}
+
+
+@dataclass(frozen=True)
+class DownloadConfig:
+    """
+    Descarga del archivo anual de NASA FIRMS por país (público, sin cuenta ni token).
+
+    Attributes
+    ----------
+    base_url : str
+        Raíz del archivo: ``<base_url>/<fuente>/<año>/<fuente>_<año>_<país>.csv``.
+    country : str
+        País tal como lo nombra FIRMS (``Spain``).
+    sources : dict[str, int]
+        Fuente -> primer año con datos (MODIS desde 2000, VIIRS S-NPP desde 2012, NOAA-20
+        desde 2018).
+    start_year : int
+        Primer año a descargar.
+    end_year : int | None
+        Último año; ``None`` = último año completo (el año en curso aún no está en el archivo).
+    directory : str
+        Carpeta destino de los CSV.
+    timeout_s, retries, retry_wait_s : float, int, float
+        Tiempo máximo por petición, reintentos y espera (se multiplica por el intento).
+    """
+
+    base_url: str = "https://firms.modaps.eosdis.nasa.gov/data/country"
+    country: str = "Spain"
+    sources: dict[str, int] = field(default_factory=_default_download_sources)
+    start_year: int = 2000
+    end_year: int | None = None
+    directory: str = "data/raw"
+    timeout_s: float = 60.0
+    retries: int = 3
+    retry_wait_s: float = 2.0
+
+    def __post_init__(self) -> None:
+        if self.end_year is not None and self.end_year < self.start_year:
+            raise InvalidConfigError("download.end_year debe ser >= start_year")
+
+        if self.retries < 1 or self.timeout_s <= 0 or not self.sources:
+            raise InvalidConfigError("download: retries >= 1, timeout_s > 0 y alguna fuente")
+
+
+@dataclass(frozen=True)
+class NrtConfig:
+    """
+    Descarga de los ficheros casi en tiempo real (NRT) de NASA FIRMS para el año en curso.
+
+    El archivo anual (``download``) solo llega hasta el último año completo; el NRT cubre los
+    últimos ~60 días. Necesita un token de Earthdata en la variable de entorno ``token_env``
+    (el token **nunca** va en este fichero).
+
+    Attributes
+    ----------
+    enabled : bool
+        Si es ``False`` no se descarga el NRT.
+    base_url : str
+        Raíz del archivo NRT; los ficheros están en ``<base_url>/<fuente>/<región>/``.
+    region : str
+        Región de los ficheros NRT (``Europe``).
+    sources : tuple[str, ...]
+        Carpetas de cada sensor/satélite.
+    token_env : str
+        Nombre de la variable de entorno con el token (``Authorization: Bearer``). Tiene prioridad.
+    token_file : str
+        Fichero local con el token (una línea), **ignorado por git**, que se usa si no hay variable
+        de entorno. Una ruta relativa se resuelve respecto a la carpeta ``etls``.
+    directory : str
+        Carpeta destino de los ficheros.
+    refetch_days : int
+        Los ficheros de los últimos días se vuelven a bajar siempre: crecen durante el día.
+    timeout_s, retries, retry_wait_s : float, int, float
+        Tiempo máximo por petición, reintentos y espera.
+    """
+
+    enabled: bool = True
+    base_url: str = "https://nrt3.modaps.eosdis.nasa.gov/archive/FIRMS"
+    region: str = "Europe"
+    sources: tuple[str, ...] = (
+        "modis-c6.1",
+        "suomi-npp-viirs-c2",
+        "noaa-20-viirs-c2",
+        "noaa-21-viirs-c2",
+    )
+    token_env: str = "EARTHDATA_TOKEN"
+    token_file: str = ".secrets/earthdata_token"
+    directory: str = "data/raw/nrt"
+    refetch_days: int = 2
+    timeout_s: float = 60.0
+    retries: int = 3
+    retry_wait_s: float = 2.0
+
+    def __post_init__(self) -> None:
+        if self.refetch_days < 0 or self.retries < 1 or self.timeout_s <= 0:
+            raise InvalidConfigError("nrt: refetch_days >= 0, retries >= 1 y timeout_s > 0")
+
+        if not self.sources:
+            raise InvalidConfigError("nrt.sources necesita al menos una carpeta")
 
 
 @dataclass(frozen=True)
@@ -231,6 +435,9 @@ class PipelineConfig:
     events: EventConfig = field(default_factory=EventConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     land_cover: LandCoverConfig = field(default_factory=LandCoverConfig)
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    download: DownloadConfig = field(default_factory=DownloadConfig)
+    nrt: NrtConfig = field(default_factory=NrtConfig)
 
     def algorithm_parameters(self) -> dict[str, Any]:
         """
@@ -248,6 +455,8 @@ class PipelineConfig:
             "link_max_window_gap": self.linking.max_window_gap,
             "metric_crs": self.geometry.metric_crs,
             "biomass_coefficient_kg_per_mj": self.biomass.coefficient_kg_per_mj,
+            "pass_gap_minutes": self.biomass.pass_gap_minutes,
+            "pass_window_hours": self.biomass.pass_window_hours,
             "inactive_after_hours": self.events.inactive_after_hours,
             "modis_low_max": self.confidence.modis_low_max,
             "modis_nominal_max": self.confidence.modis_nominal_max,
@@ -256,7 +465,11 @@ class PipelineConfig:
         }
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """Configuración serializable; la URL de la base de datos se oculta (lleva la clave)."""
+        data = asdict(self)
+        data["database"]["url"] = "***" if self.database.url else None
+
+        return data
 
 
 def _build_section(section_cls: type, values: dict[str, Any] | None, name: str) -> Any:

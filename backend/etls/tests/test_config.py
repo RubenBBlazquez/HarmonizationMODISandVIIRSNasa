@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,8 @@ from shapely.geometry import Point
 
 from fire_etl.config import (
     AreaOfInterestConfig,
+    DatabaseConfig,
+    DownloadConfig,
     InvalidConfigError,
     PipelineConfig,
     config_from_dict,
@@ -24,7 +27,17 @@ def test_default_yaml_matches_dataclass_defaults_except_spain_area():
     loaded = load_config(DEFAULT_YAML)
 
     assert loaded.area_of_interest.is_defined
-    assert replace(loaded, area_of_interest=AreaOfInterestConfig()) == PipelineConfig()
+    no_zones = replace(loaded.validation, exclusion_zones=())
+    neutral = replace(
+        loaded,
+        area_of_interest=AreaOfInterestConfig(),
+        database=DatabaseConfig(),
+        validation=no_zones,
+    )
+    assert loaded.download == DownloadConfig()
+
+    assert loaded.database.enabled
+    assert neutral == PipelineConfig()
 
 
 @pytest.mark.parametrize(
@@ -44,6 +57,35 @@ def test_default_area_of_interest_covers_spain_only(lat, lon, inside):
     area = area_of_interest_geometry(load_config(DEFAULT_YAML).area_of_interest)
 
     assert area.intersects(Point(lon, lat)) is inside
+
+
+def test_default_yaml_defines_the_la_palma_eruption_exclusion_zone():
+    zones = load_config(DEFAULT_YAML).validation.exclusion_zones
+
+    assert [zone.name for zone in zones] == ["erupcion_la_palma_2021"]
+    zone = zones[0]
+    assert zone.reason == "volcanic_eruption"
+    assert (zone.start, zone.end) == (date(2021, 9, 19), date(2021, 12, 31))
+    # El volcán (28,617 N, 17,889 O) queda dentro; el incendio forestal de La Palma de 2023
+    # (28,8 N) y la península quedan fuera.
+    min_lon, min_lat, max_lon, max_lat = zone.bbox
+    assert min_lon <= -17.889 <= max_lon and min_lat <= 28.617 <= max_lat
+    assert not (min_lat <= 28.8 <= max_lat)
+
+
+def test_exclusion_zones_are_parsed_from_plain_dicts():
+    config = config_from_dict(
+        {
+            "validation": {
+                "exclusion_zones": [
+                    {"name": "z", "bbox": [0, 0, 1, 1], "start": "2020-01-01", "reason": "x"}
+                ]
+            }
+        }
+    )
+
+    zone = config.validation.exclusion_zones[0]
+    assert zone.bbox == (0.0, 0.0, 1.0, 1.0) and zone.start == date(2020, 1, 1)
 
 
 def test_partial_override_keeps_other_defaults():

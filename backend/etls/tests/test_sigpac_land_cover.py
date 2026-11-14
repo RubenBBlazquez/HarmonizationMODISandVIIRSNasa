@@ -120,11 +120,11 @@ def test_enrich_min_confidence_threshold_clears_flags(sigpac_dir):
     assert not bool(enriched.loc[0, "is_agricultural"])
 
 
-def test_enrich_empty_sigpac_folder_leaves_fields_empty(tmp_path, capsys):
+def test_enrich_empty_sigpac_folder_leaves_fields_empty(tmp_path, caplog):
     df = pd.DataFrame({"id": [1], "lat": [40.0], "lon": [-3.7]})
 
     enriched, summary = enrich(df, tmp_path)
 
     assert pd.isna(enriched.loc[0, "land_cover"])
     assert summary.no_data == 1 and summary.sigpac == 0
-    assert "AVISO" in capsys.readouterr().out
+    assert "no hay capas" in caplog.text

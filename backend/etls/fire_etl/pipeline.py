@@ -13,18 +13,23 @@ from __future__ import annotations
 
 import argparse
 import logging
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 
+from fire_etl.clean_data import build_clean_data, write_clean_data
 from fire_etl.config import PipelineConfig, load_config
 from fire_etl.events import PreviousState, build_events
 from fire_etl.fusion import assign_time_windows, build_observations
 from fire_etl.geometry import build_detection_geometries
 from fire_etl.ingest import IngestResult, ingest_frames, read_firms_csv
 from fire_etl.outputs import PipelineTables, read_previous_state, write_tables
+from fire_etl.postgres_loader import load_to_postgres
 from fire_etl.sigpac_land_cover import enrich, log_summary
 
 LOGGER = logging.getLogger(__name__)
@@ -32,6 +37,15 @@ LOGGER = logging.getLogger(__name__)
 
 class NoDetectionsError(ValueError):
     """No quedan detecciones válidas que procesar."""
+
+
+@contextmanager
+def log_stage(name: str) -> Iterator[None]:
+    """Registra el inicio y el fin (con el tiempo) de una etapa lenta del pipeline."""
+    LOGGER.info("Iniciando: %s...", name)
+    started = time.perf_counter()
+    yield
+    LOGGER.info("Hecho: %s (%.1f s)", name, time.perf_counter() - started)
 
 
 def merge_with_previous(new: pd.DataFrame, previous: PreviousState | None) -> pd.DataFrame:
@@ -85,7 +99,11 @@ def process_detections(
         Si no hay detecciones válidas dentro del área de interés.
     """
     detections = merge_with_previous(ingest.detections, previous)
-    geometries = build_detection_geometries(detections, config.geometry, config.area_of_interest)
+    with log_stage(f"geometrías y filtro de zona ({len(detections):,} detecciones)"):
+        geometries = build_detection_geometries(
+            detections, config.geometry, config.area_of_interest
+        )
+
     if geometries.detections.empty:
         raise NoDetectionsError("No hay detecciones válidas dentro del área de interés")
 
@@ -98,10 +116,29 @@ def process_detections(
             min_confidence=config.land_cover.min_confidence,
         )
         log_summary(land_cover_summary)
+    else:
+        LOGGER.warning(
+            "Cobertura del suelo desactivada (land_cover.sigpac_dir sin definir): land_cover, "
+            "land_cover_confidence, sigpac_uso, is_agricultural e is_forest saldrán vacíos."
+        )
 
-    windowed = assign_time_windows(located, config.windows.mode)
-    observations = build_observations(windowed, config.confidence)
-    events = build_events(observations, config, previous)
+    is_valid = located["is_valid"].astype(bool)
+    if not is_valid.any():
+        raise NoDetectionsError("Ninguna detección es válida (todas marcadas con skip_reason)")
+
+    with log_stage(f"observaciones ({int(is_valid.sum()):,} detecciones válidas)"):
+        windowed = assign_time_windows(located[is_valid], config.windows.mode)
+        observations = build_observations(windowed, config.confidence)
+
+    with log_stage("eventos (enlace entre ventanas, energía y biomasa)"):
+        events = build_events(observations, config, previous)
+
+    # Las no válidas se conservan en la tabla de detecciones, sin observación ni evento.
+    skipped = located[~is_valid].assign(observation_id=None, is_representative=False)
+    all_detections = pd.concat([observations.detections, skipped], ignore_index=True)
+    all_detections = all_detections.sort_values(
+        ["acq_datetime", "detection_id"], ignore_index=True
+    )
 
     discarded = ingest.discarded
     if geometries.outside_aoi:
@@ -115,7 +152,8 @@ def process_detections(
         "config": config.to_dict(),
         "metric_crs_resolved": geometries.metric_crs.to_string(),
         "counts": {
-            "detections": len(observations.detections),
+            "detections": len(all_detections),
+            "skipped_detections": int((~is_valid).sum()),
             "observations": len(events.observations),
             "fire_events": len(events.events),
             "event_merges": len(events.merges),
@@ -124,7 +162,7 @@ def process_detections(
     }
 
     return PipelineTables(
-        detections=observations.detections,
+        detections=all_detections,
         observations=events.observations,
         events=events.events,
         event_detections=events.event_detections,
@@ -138,6 +176,7 @@ def run_frames(
     frames: Iterable[pd.DataFrame],
     config: PipelineConfig | None = None,
     output_dir: str | Path | None = None,
+    clean_dir: str | Path | None = None,
 ) -> PipelineTables:
     """
     Procesa DataFrames FIRMS ya cargados y escribe las salidas.
@@ -153,6 +192,9 @@ def run_frames(
         Configuración; por defecto los valores de ``config/default.yaml``.
     output_dir : str | Path | None
         Directorio de salida; por defecto ``config.output.directory``.
+    clean_dir : str | Path | None
+        Directorio de los datos finales (``clean_data``); por defecto
+        ``config.output.clean_data_directory``.
 
     Returns
     -------
@@ -163,15 +205,32 @@ def run_frames(
     directory = Path(output_dir or config.output.directory)
     previous = read_previous_state(directory) if config.output.use_previous_state else None
 
-    tables = process_detections(ingest_frames(frames, config), config, previous)
-    write_tables(tables, directory, config.geometry.storage_crs)
+    with log_stage("ingesta y validación de los ficheros FIRMS"):
+        ingest = ingest_frames(frames, config)
+
+    tables = process_detections(ingest, config, previous)
+    with log_stage("escritura de GeoParquet"):
+        write_tables(tables, directory, config.geometry.storage_crs)
+
     LOGGER.info("Salidas escritas en %s: %s", directory, tables.run_parameters["counts"])
+
+    clean_directory = Path(clean_dir or config.output.clean_data_directory)
+    with log_stage("datos finales (clean_data)"):
+        clean = build_clean_data(tables, config)
+        write_clean_data(clean, clean_directory)
+    LOGGER.info("Datos finales escritos en %s: %s", clean_directory, clean.metadata["counts"])
+
+    # Después de los ficheros: el GeoParquet es el respaldo si la base de datos falla.
+    load_to_postgres(tables, config)
 
     return tables
 
 
 def run(
-    input_paths: Sequence[str | Path], config: PipelineConfig, output_dir: str | Path | None = None
+    input_paths: Sequence[str | Path],
+    config: PipelineConfig,
+    output_dir: str | Path | None = None,
+    clean_dir: str | Path | None = None,
 ) -> PipelineTables:
     """
     Ingiere ficheros locales, procesa y escribe las salidas.
@@ -184,13 +243,17 @@ def run(
         Configuración del pipeline.
     output_dir : str | Path | None
         Directorio de salida; por defecto ``config.output.directory``.
+    clean_dir : str | Path | None
+        Directorio de los datos finales; por defecto ``config.output.clean_data_directory``.
 
     Returns
     -------
     PipelineTables
         Tablas escritas.
     """
-    return run_frames((read_firms_csv(path) for path in input_paths), config, output_dir)
+    frames = (read_firms_csv(path) for path in input_paths)
+
+    return run_frames(frames, config, output_dir, clean_dir)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
