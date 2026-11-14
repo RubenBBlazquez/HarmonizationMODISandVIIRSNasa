@@ -1,6 +1,8 @@
-# IDE
+# IDE y sistema operativo
 .idea/
 .vscode/
+.DS_Store
+Thumbs.db
 
 # Entornos y secretos
 .env
@@ -15,9 +17,12 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Node
+# Node.js / TypeScript
 node_modules/
 frontend/dist/
+dist/
+*.tsbuildinfo
+package-lock.json
 
 # Salidas generadas del pipeline
 backend/etls/output/

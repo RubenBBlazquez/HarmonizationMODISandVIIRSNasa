@@ -1,0 +1,3 @@
+sensor,scene_id,acquisition_datetime,latitude,longitude,collection,product,band_red,band_nir,cloud_cover_percent,quality_flag
+MODIS,MODIS_EXAMPLE_001,2026-11-14T10:30:00Z,39.700000,-4.850000,061,MOD09GA,0.1200,0.4300,8.5,good
+VIIRS,VIIRS_EXAMPLE_001,2026-11-14T10:32:00Z,39.700000,-4.850000,002,VNP09GA,0.1150,0.4250,7.9,good
