@@ -1,0 +1,19 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Node.js / TypeScript
+node_modules/
+frontend/dist/
+dist/
+*.tsbuildinfo
+
+# IDEs and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+package-lock.json
