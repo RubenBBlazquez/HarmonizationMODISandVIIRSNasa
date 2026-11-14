@@ -1,0 +1,66 @@
+
+# Configuración única del pipeline de fusión MODIS + VIIRS (NASA FIRMS).
+# Todos los parámetros del algoritmo viven aquí; el código no contiene valores fijos.
+
+area_of_interest:
+  # Filtro espacial en EPSG:4326. Usa `bbox` o `polygon_wkt` (o ninguno = sin filtro).
+  bbox: null # [min_lon, min_lat, max_lon, max_lat]
+  polygon_wkt: null
+
+validation:
+  lat_range: [-90.0, 90.0]
+  lon_range: [-180.0, 180.0]
+  scan_km_range: [0.1, 10.0]
+  track_km_range: [0.1, 10.0]
+  frp_min: 0.0
+  allowed_daynight: [D, N]
+
+confidence:
+  # MODIS: confianza numérica 0-100 -> low/nominal/high.
+  modis_low_max: 29 # 0..29 -> low
+  modis_nominal_max: 79 # 30..79 -> nominal ; 80..100 -> high
+  # VIIRS: categórica. Se aceptan abreviaturas y palabras completas (los ficheros NRT usan "nominal").
+  viirs_mapping:
+    l: low
+    low: low
+    n: nominal
+    nominal: nominal
+    h: high
+    high: high
+  # Nivel fusionado de una observación con un solo sensor en confianza alta: medium | high.
+  single_sensor_high_level: medium
+  # Las observaciones low aisladas (un solo sensor, low) se marcan siempre;
+  # si true, además se excluyen del enlace a eventos.
+  discard_isolated_low: true
+
+biomass:
+  # Biomasa consumida por energía radiada (kg/MJ). FRP (MW = MJ/s) * coeficiente = kg/s.
+  coefficient_kg_per_mj: 0.368
+
+geometry:
+  # CRS métrico para TODOS los cálculos de distancia/área. EPSG:3035 (LAEA Europa) o "auto"
+  # (zona UTM calculada a partir del centro del área de interés o de los datos).
+  metric_crs: "EPSG:3035"
+  storage_crs: "EPSG:4326"
+  footprint_buffer_m: 400.0
+
+windows:
+  # day_utc | hours_12 | date_daynight
+  mode: day_utc
+
+linking:
+  # Distancia máxima entre observaciones de ventanas consecutivas para unirlas en un evento.
+  max_distance_m: 1000.0
+  # Diferencia máxima de índice de ventana considerada "consecutiva".
+  max_window_gap: 1
+
+events:
+  # Horas sin detecciones a partir de las cuales un evento pasa a "closed".
+  inactive_after_hours: 48.0
+  # Instante de referencia para el estado (ISO 8601 UTC). null = última detección del dataset.
+  reference_time: null
+
+output:
+  directory: output
+  # Reutiliza las salidas previas del directorio como estado (event_id estable + idempotencia).
+  use_previous_state: true

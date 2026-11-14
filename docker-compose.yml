@@ -1,0 +1,41 @@
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: harmonization-postgis
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fires
+      POSTGRES_USER: fires
+      POSTGRES_PASSWORD: fires  # solo desarrollo local
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+      - ./backend/databases/postgis/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: harmonization-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://fires:fires@postgis:5432/fires
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgis:
+        condition: service_healthy
+    volumes:
+      - ./backend/etls/data:/app/backend/etls/data:ro
+      - ./backend/etls/config:/app/backend/etls/config:ro
+      - etl_output:/app/backend/etls/output
+
+volumes:
+  postgis_data:
+  etl_output:
