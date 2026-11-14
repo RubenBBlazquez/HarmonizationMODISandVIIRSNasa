@@ -26,4 +26,6 @@ package-lock.json
 
 # Salidas generadas del pipeline
 backend/etls/output/
+backend/etls/clean_data/
 backend/etls/data/raw/
+backend/etls/.secrets/
