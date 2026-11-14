@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Incendios · TerraMatch</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root { font-family: 'DM Sans', sans-serif; color: #17241f; background: #f5f7f4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1400px; margin: 0 auto; padding: 24px 32px 48px; }
+    a { color: #2f5d43; }
+    .back { font-size: 12px; }
+    h1 { font: 700 clamp(22px, 2.6vw, 30px) Manrope, sans-serif; letter-spacing: -1px; margin: 10px 0 6px; }
+    .criteria { color: #5d6d63; font-size: 13px; margin: 0 0 10px; }
+    .help { background: #f2f7ee; color: #45603f; border-radius: 9px; padding: 10px 12px; font-size: 12px; line-height: 1.5; margin: 0 0 14px; }
+    .status { color: #6d7b72; font-size: 12px; margin: 0 0 14px; }
+    .summary { width: 100%; max-width: 640px; border-collapse: collapse; background: #fff; border: 1px solid #e8ece6; border-radius: 10px; overflow: hidden; font-size: 12px; margin: 0 0 18px; }
+    .summary th, .summary td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #f0f2ee; }
+    .summary th { background: #fafbf9; color: #7d8a81; font-weight: 600; font-size: 11px; }
+    .summary th:first-child, .summary td:first-child { text-align: left; }
+    .summary tr.reference td { background: #fdf0ea; font-weight: 600; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+    .card { background: #fff; border: 1px solid #e8ece6; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; }
+    .card header { padding: 12px 14px 8px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+    .card h2 { font: 700 14px Manrope, sans-serif; margin: 0; }
+    .badge { font-size: 10px; font-weight: 700; border-radius: 99px; padding: 3px 8px; background: #efe9f8; color: #6a43a8; }
+    .badge.active { background: #fbe9e6; color: #b03a28; }
+    .badge.closed { background: #eef1ee; color: #5b6b62; }
+    .fire-map { height: 240px; background: #e7eee2; }
+    .fire-map .loading { display: grid; place-items: center; height: 100%; color: #7d8a81; font-size: 12px; }
+    .note { font-size: 11px; color: #7d8a81; padding: 4px 14px 0; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 12px; margin: 0; padding: 10px 14px 14px; font-size: 12px; }
+    .stats > div[title] { cursor: help; }
+    .stats dt { color: #7d8a81; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+    .stats dd { margin: 2px 0 0; font-weight: 600; color: #26362c; }
+    @media (max-width: 650px) { main { padding: 18px 16px 40px; } .grid { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/">← Volver al mapa</a>
+    <h1 id="page-title">Incendios</h1>
+    <p class="criteria" id="criteria"></p>
+    <p class="help" id="help"></p>
+    <p class="status" id="status">Cargando…</p>
+    <table class="summary" id="summary" hidden></table>
+    <section class="grid" id="grid" aria-label="Incendios"></section>
+  </main>
+  <script type="module" src="/src/fires.ts"></script>
+</body>
+</html>
