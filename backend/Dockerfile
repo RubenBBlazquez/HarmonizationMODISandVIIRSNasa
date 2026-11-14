@@ -14,6 +14,8 @@ COPY backend/etls/pyproject.toml /app/backend/etls/pyproject.toml
 COPY backend/etls/fire_etl /app/backend/etls/fire_etl
 RUN pip install /app/backend/etls
 
+COPY backend/__init__.py /app/backend/__init__.py
+COPY backend/api /app/backend/api
 COPY backend/main.py /app/backend/main.py
 
 EXPOSE 8000
