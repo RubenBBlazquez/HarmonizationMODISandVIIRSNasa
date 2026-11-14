@@ -3,10 +3,10 @@ Orquestación del pipeline: ingesta -> geometrías -> observaciones -> eventos -
 
 Uso por línea de comandos::
 
-    python -m fire_etl.pipeline --config ../config/default.yaml \\
-        --input ../data/sample/MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt \\
-        --input ../data/sample/J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt \\
-        --output-dir ../output
+    python -m fire_etl.pipeline --config config/default.yaml \\
+        --input data/sample/MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt \\
+        --input data/sample/J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt \\
+        --output-dir output
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from fire_etl.fusion import assign_time_windows, build_observations
 from fire_etl.geometry import build_detection_geometries
 from fire_etl.ingest import IngestResult, ingest_frames, read_firms_csv
 from fire_etl.outputs import PipelineTables, read_previous_state, write_tables
+from fire_etl.sigpac_land_cover import enrich, log_summary
 
 LOGGER = logging.getLogger(__name__)
 
@@ -88,7 +89,17 @@ def process_detections(
     if geometries.detections.empty:
         raise NoDetectionsError("No hay detecciones válidas dentro del área de interés")
 
-    windowed = assign_time_windows(geometries.detections, config.windows.mode)
+    located = geometries.detections
+    if config.land_cover.sigpac_dir:
+        located, land_cover_summary = enrich(
+            located,
+            Path(config.land_cover.sigpac_dir),
+            sigpac_confidence=config.land_cover.sigpac_confidence,
+            min_confidence=config.land_cover.min_confidence,
+        )
+        log_summary(land_cover_summary)
+
+    windowed = assign_time_windows(located, config.windows.mode)
     observations = build_observations(windowed, config.confidence)
     events = build_events(observations, config, previous)
 

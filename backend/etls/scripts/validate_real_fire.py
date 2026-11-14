@@ -25,13 +25,12 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
+from _paths import ETLS_DIR, SAMPLE_DIR
 from fire_etl.config import AreaOfInterestConfig, PipelineConfig, load_config
-from fire_etl.outputs import PipelineTables, to_storage_crs
 from fire_etl.ingest import read_firms_csv
+from fire_etl.outputs import PipelineTables, to_storage_crs
 from fire_etl.pipeline import run_frames
 
-ETLS_DIR = Path(__file__).resolve().parents[1]
-SAMPLE_DIR = ETLS_DIR / "data" / "sample"
 DEFAULT_MODIS = SAMPLE_DIR / "MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt"
 DEFAULT_VIIRS = SAMPLE_DIR / "J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt"
 

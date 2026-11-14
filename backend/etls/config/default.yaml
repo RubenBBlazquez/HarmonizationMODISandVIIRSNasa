@@ -4,8 +4,17 @@
 
 area_of_interest:
   # Filtro espacial en EPSG:4326. Usa `bbox` o `polygon_wkt` (o ninguno = sin filtro).
+  # MVP solo sobre España: rectángulos generosos (no se pierden detecciones españolas) para la
+  # Península + Baleares, Canarias y Melilla (Ceuta ya cae en el primero). Incluyen franjas de
+  # Portugal, Francia y Marruecos: para recortar exactamente, sustituye por el polígono de la
+  # frontera (IGN / Natural Earth) en WKT.
   bbox: null # [min_lon, min_lat, max_lon, max_lat]
-  polygon_wkt: null
+  polygon_wkt: >-
+    MULTIPOLYGON (
+    ((-9.5 35.8, 4.5 35.8, 4.5 44.0, -9.5 44.0, -9.5 35.8)),
+    ((-18.5 27.4, -13.0 27.4, -13.0 29.6, -18.5 29.6, -18.5 27.4)),
+    ((-3.1 35.2, -2.85 35.2, -2.85 35.4, -3.1 35.4, -3.1 35.2))
+    )
 
 validation:
   lat_range: [-90.0, 90.0]
@@ -38,9 +47,11 @@ biomass:
   coefficient_kg_per_mj: 0.368
 
 geometry:
-  # CRS métrico para TODOS los cálculos de distancia/área. EPSG:3035 (LAEA Europa) o "auto"
+  # CRS métrico para TODOS los cálculos de distancia/área. EPSG:25830 (ETRS89 / UTM 30N, el
+  # habitual de SIGPAC en la Península; en Canarias, UTM 28N, la distorsión de escala llega a
+  # ~2-3 %: aceptable para el MVP) o "auto"
   # (zona UTM calculada a partir del centro del área de interés o de los datos).
-  metric_crs: "EPSG:3035"
+  metric_crs: "EPSG:25830"
   storage_crs: "EPSG:4326"
   footprint_buffer_m: 400.0
 
@@ -64,3 +75,10 @@ output:
   directory: output
   # Reutiliza las salidas previas del directorio como estado (event_id estable + idempotencia).
   use_previous_state: true
+
+land_cover:
+  # Carpeta con los recintos SIGPAC descargados del FEGA (.shp / .gpkg). null = sin enriquecer.
+  sigpac_dir: null
+  sigpac_confidence: 0.95
+  # Confianza mínima para is_agricultural / is_forest.
+  min_confidence: 0.0

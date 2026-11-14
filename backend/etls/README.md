@@ -10,36 +10,53 @@ reproducen el esquema PostGIS de `backend/databases/postgis/init/01_schema.sql`.
 
 ```
 backend/etls/
+├── pyproject.toml  .flake8  .pre-commit-config.yaml  requirements.txt
 ├── config/default.yaml        # TODOS los parámetros del algoritmo
 ├── data/sample/               # 20 filas reales de MODIS (MCD14DL) y 20 de VIIRS NOAA-20 (VJ114IMGTDL)
-├── scripts/validate_real_fire.py
-└── src/
-    ├── pyproject.toml  .flake8  .pre-commit-config.yaml
-    ├── fire_etl/
-    │   ├── config.py       # dataclasses + carga YAML
-    │   ├── ingest.py       # CSV FIRMS -> esquema común, validación, detection_id
-    │   ├── confidence.py   # normalización y matriz de confianza fusionada (función pura)
-    │   ├── geometry.py     # puntos, AOI, CRS métrico, footprints
-    │   ├── graph.py        # sjoin + componentes conexas (scipy)
-    │   ├── fusion.py       # ventanas temporales -> observaciones
-    │   ├── events.py       # enlace entre ventanas -> fire_events, ids estables, fusiones
-    │   ├── outputs.py      # GeoParquet (EPSG:4326) y lectura del estado previo
-    │   └── pipeline.py     # orquestación + CLI
-    └── tests/
+├── scripts/                   # run_pipeline.py, validate_real_fire.py (+ _paths.py)
+├── fire_etl/
+│   ├── config.py       # dataclasses + carga YAML
+│   ├── ingest.py       # CSV FIRMS -> esquema común, validación, detection_id
+│   ├── confidence.py   # normalización y matriz de confianza fusionada (función pura)
+│   ├── geometry.py     # puntos, AOI, CRS métrico, footprints
+│   ├── graph.py        # sjoin + componentes conexas (scipy)
+│   ├── fusion.py       # ventanas temporales -> observaciones
+│   ├── events.py       # enlace entre ventanas -> fire_events, ids estables, fusiones
+│   ├── sigpac_land_cover.py  # cobertura del suelo con SIGPAC
+│   ├── outputs.py      # GeoParquet (EPSG:4326) y lectura del estado previo
+│   └── pipeline.py     # orquestación + CLI
+└── tests/
 ```
+
+Los scripts de `scripts/` se ejecutan desde `backend/etls` con `python scripts/<script>.py`:
+`scripts/_paths.py` añade `backend/etls` al `sys.path`, así que no hace falta instalar el
+paquete (sí sus dependencias).
+
+## Alcance: solo España
+
+El MVP trabaja únicamente con detecciones en España. `config/default.yaml` define un área de
+interés (`area_of_interest.polygon_wkt`) con la Península + Baleares, Canarias y Melilla, y usa
+EPSG:25830 (ETRS89 / UTM 30N) como CRS métrico. Las detecciones fuera del área se descartan y se
+cuentan como `outside_aoi` en `ingest_discards.csv`. Los rectángulos son generosos para no
+perder detecciones españolas, así que incluyen franjas de Portugal, Francia y Marruecos; para un
+recorte exacto, sustituye el WKT por el polígono de la frontera. En Canarias (UTM 28N) la escala
+del CRS se distorsiona un 2-3 %, aceptable para el MVP.
+
+Las muestras de `data/sample` son de toda Europa: con esta configuración solo se conservan las
+filas españolas.
 
 ## Instalación y uso
 
 ```bash
-cd backend/etls/src
+cd backend/etls
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,viz]"
 
 # Pipeline sobre los ficheros de muestra
-fire-etl --config ../config/default.yaml \
-  --input ../data/sample/MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt \
-  --input ../data/sample/J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt \
-  --output-dir ../output
+fire-etl --config config/default.yaml \
+  --input data/sample/MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt \
+  --input data/sample/J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt \
+  --output-dir output
 
 pytest --cov=fire_etl
 pre-commit run --all-files --config .pre-commit-config.yaml
@@ -58,7 +75,7 @@ pre-commit run --all-files --config .pre-commit-config.yaml
    conserva en `confidence_raw`.
 3. **`detection_id`** = SHA-1 de `source|satellite|acq_datetime|lat|lon`, con coordenadas
    redondeadas a 5 decimales. Reingerir el mismo fichero no genera duplicados.
-4. **Geometrías** (`geometry.py`). Punto en EPSG:4326 y cálculos en el CRS métrico (EPSG:3035 por
+4. **Geometrías** (`geometry.py`). Punto en EPSG:4326 y cálculos en el CRS métrico (EPSG:25830 por
    defecto; `auto` = zona UTM del AOI). El footprint es un rectángulo `scan` (X) × `track` (Y) km
    ampliado con el buffer (400 m) en esquinas rectas, así que mide `scan·1000 + 2·buffer` m de
    ancho.
@@ -132,7 +149,7 @@ Se usa GeoParquet porque GeoPackage solo admite una geometría por capa.
 
 - El footprint está alineado a los ejes. Ignora la inclinación de la órbita, el efecto *bow-tie*
   y la PSF del sensor.
-- `date_daynight`: en Europa, una fecha UTC con `N` agrupa las pasadas de madrugada y de noche.
+- `date_daynight`: en España, una fecha UTC con `N` agrupa las pasadas de madrugada y de noche.
   El índice es absoluto (`2·día` para `N`, `2·día + 1` para `D`), así que las pasadas de la noche
   de `d` solo se enlazan con `N(d+1)` a través de `D(d)`.
 - El estado previo se guarda en ficheros. Si se cambian los parámetros entre ejecuciones, los
@@ -157,6 +174,43 @@ from fire_etl.pipeline import run_frames
 tables = run_frames([df_modis, df_viirs])   # DataFrames FIRMS crudos, en cualquier orden
 tables.events, tables.observations, tables.detections
 ```
+
+## Cobertura del suelo con SIGPAC
+
+Paso opcional del pipeline principal: si `land_cover.sigpac_dir` apunta a una carpeta con los
+recintos SIGPAC (`.shp` / `.gpkg` descargados del FEGA; no se descargan), cada detección recibe
+`land_cover`, `land_cover_confidence`, `land_cover_source` (`sigpac`), `sigpac_uso`,
+`is_agricultural` e `is_forest`, y se escriben en `detections.parquet`. Con `sigpac_dir: null`
+(por defecto) el paso no se ejecuta.
+
+```yaml
+land_cover:
+  sigpac_dir: /ruta/sigpac
+  sigpac_confidence: 0.95
+  min_confidence: 0.0
+```
+
+```bash
+pip install -r requirements.txt
+python scripts/run_pipeline.py   # con land_cover.sigpac_dir definido en el YAML
+```
+
+1. Los puntos con lat/lon fuera de rango quedan vacíos y se cuentan.
+2. Cruza cada capa **en su propio CRS** con `sjoin(predicate="within")`. El campo de uso se
+   busca como `uso_sigpac` o `uso`, sin distinguir mayúsculas. Si un punto cae en varios
+   recintos se usa el primero y se avisa.
+3. El código se normaliza con `SIGPAC_TO_LAND_COVER` (editable); los desconocidos pasan a
+   `other` y se registran en el log.
+4. **Sin recinto, los campos quedan vacíos.** No hay fuente de respaldo en el MVP.
+5. `is_agricultural` / `is_forest` = clase `crops` / `trees` con confianza ≥ `min_confidence`.
+6. Las columnas que ya existan con esos nombres se renombran con `_prev` y se avisa.
+
+Tests: `pytest tests/test_sigpac_land_cover.py tests/test_pipeline_land_cover.py`.
+
+> Land cover: SIGPAC (FEGA / Ministerio de Agricultura, Pesca y Alimentación)
+>
+> ⚠️ Revisa las condiciones de reutilización de SIGPAC en el aviso legal del FEGA antes de
+> redistribuir los resultados.
 
 ## Validación con un incendio real
 

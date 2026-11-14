@@ -1,7 +1,6 @@
 output/
 data/raw/
 .venv/
-src/.venv/
 __pycache__/
 *.egg-info/
 .pytest_cache/

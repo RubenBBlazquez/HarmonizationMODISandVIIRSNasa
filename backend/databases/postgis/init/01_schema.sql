@@ -1,9 +1,9 @@
--- Esquema PostGIS para las salidas del pipeline backend/etls/src/fire_etl.
+-- Esquema PostGIS para las salidas del pipeline backend/etls/fire_etl.
 -- Las columnas y tipos se corresponden con los GeoParquet de backend/etls/output:
 --   detections.parquet, observations.parquet, fire_events.parquet,
 --   event_detections.parquet, event_merges.parquet.
 -- Geometrías almacenadas en EPSG:4326; las áreas (*_area_m2) se calculan en el CRS métrico
--- configurado (EPSG:3035 por defecto). El área de footprints NO es superficie quemada.
+-- configurado (EPSG:25830 por defecto). El área de footprints NO es superficie quemada.
 
 CREATE EXTENSION IF NOT EXISTS postgis;
 

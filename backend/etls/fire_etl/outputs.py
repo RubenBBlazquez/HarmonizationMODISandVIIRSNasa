@@ -26,6 +26,7 @@ import pandas as pd
 
 from fire_etl.events import MERGE_COLUMNS, PreviousState
 from fire_etl.ingest import DETECTION_COLUMNS
+from fire_etl.sigpac_land_cover import NEW_COLUMNS as LAND_COVER_COLUMNS
 
 DETECTIONS_FILE = "detections.parquet"
 OBSERVATIONS_FILE = "observations.parquet"
@@ -114,7 +115,8 @@ def write_tables(tables: PipelineTables, directory: str | Path, storage_crs: str
     output = Path(directory)
     output.mkdir(parents=True, exist_ok=True)
 
-    detections = tables.detections.loc[:, list(DETECTION_OUTPUT_COLUMNS)]
+    land_cover = [name for name in LAND_COVER_COLUMNS if name in tables.detections.columns]
+    detections = tables.detections.loc[:, [*DETECTION_OUTPUT_COLUMNS, *land_cover]]
     to_storage_crs(detections, storage_crs).to_parquet(output / DETECTIONS_FILE, index=False)
     to_storage_crs(tables.observations, storage_crs).to_parquet(
         output / OBSERVATIONS_FILE, index=False

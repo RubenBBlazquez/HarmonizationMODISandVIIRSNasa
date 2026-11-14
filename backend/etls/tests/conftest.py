@@ -11,7 +11,7 @@ import pytest
 from fire_etl.config import PipelineConfig
 from fire_etl.ingest import IngestResult, ingest_frames
 
-SAMPLE_DIR = Path(__file__).resolve().parents[2] / "data" / "sample"
+SAMPLE_DIR = Path(__file__).resolve().parents[1] / "data" / "sample"
 MODIS_SAMPLE = SAMPLE_DIR / "MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt"
 VIIRS_SAMPLE = SAMPLE_DIR / "J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt"
 

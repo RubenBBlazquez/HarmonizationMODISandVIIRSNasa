@@ -143,7 +143,7 @@ class BiomassConfig:
 class GeometryConfig:
     """CRS de cálculo/almacenamiento y buffer del footprint."""
 
-    metric_crs: str = "EPSG:3035"
+    metric_crs: str = "EPSG:25830"
     storage_crs: str = "EPSG:4326"
     footprint_buffer_m: float = 400.0
 
@@ -198,6 +198,26 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class LandCoverConfig:
+    """
+    Enriquecimiento opcional de las detecciones con cobertura del suelo (SIGPAC).
+
+    Attributes
+    ----------
+    sigpac_dir : str | None
+        Carpeta con los recintos SIGPAC (shapefile / GeoPackage). ``None`` desactiva el paso.
+    sigpac_confidence : float
+        Confianza asignada a los puntos resueltos con SIGPAC.
+    min_confidence : float
+        Umbral de confianza para ``is_agricultural`` / ``is_forest``.
+    """
+
+    sigpac_dir: str | None = None
+    sigpac_confidence: float = 0.95
+    min_confidence: float = 0.0
+
+
+@dataclass(frozen=True)
 class PipelineConfig:
     """Configuración completa del pipeline."""
 
@@ -210,6 +230,7 @@ class PipelineConfig:
     linking: LinkingConfig = field(default_factory=LinkingConfig)
     events: EventConfig = field(default_factory=EventConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    land_cover: LandCoverConfig = field(default_factory=LandCoverConfig)
 
     def algorithm_parameters(self) -> dict[str, Any]:
         """

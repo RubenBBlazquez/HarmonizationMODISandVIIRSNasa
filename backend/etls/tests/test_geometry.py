@@ -23,7 +23,7 @@ def test_footprint_is_scan_by_track_plus_buffer(config):
     )
     min_x, min_y, max_x, max_y = result.detections.geometry.iloc[0].bounds
 
-    assert result.metric_crs.to_epsg() == 3035
+    assert result.metric_crs.to_epsg() == 25830
     assert max_x - min_x == pytest.approx(2000 + 2 * 400, abs=1e-6)
     assert max_y - min_y == pytest.approx(1500 + 2 * 400, abs=1e-6)
     assert result.detections["footprint_area_m2"].iloc[0] == pytest.approx(2800 * 2300)

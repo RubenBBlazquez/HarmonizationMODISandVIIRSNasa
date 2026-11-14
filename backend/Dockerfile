@@ -10,9 +10,9 @@ COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --upgrade pip \
     && pip install -r /app/backend/requirements.txt
 
-COPY backend/etls/src/pyproject.toml /app/backend/etls/src/pyproject.toml
-COPY backend/etls/src/fire_etl /app/backend/etls/src/fire_etl
-RUN pip install /app/backend/etls/src
+COPY backend/etls/pyproject.toml /app/backend/etls/pyproject.toml
+COPY backend/etls/fire_etl /app/backend/etls/fire_etl
+RUN pip install /app/backend/etls
 
 COPY backend/main.py /app/backend/main.py
 

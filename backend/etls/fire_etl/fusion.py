@@ -94,7 +94,7 @@ def assign_time_windows(detections: pd.DataFrame, mode: WindowMode) -> pd.DataFr
     - ``date_daynight``: ventana = ``acq_date`` UTC + ``daynight``. Inicio y fin son la primera y
       la última adquisición observadas. El índice también es absoluto: ``2 * día`` para ``N`` y
       ``2 * día + 1`` para ``D``, de modo que N(d), D(d) y N(d+1) son consecutivas y los huecos
-      sin datos no acercan ventanas lejanas. Limitación: en Europa una fecha ``N`` agrupa pasadas
+      sin datos no acercan ventanas lejanas. Limitación: en España una fecha ``N`` agrupa pasadas
       de madrugada (~01-03 UTC) y de noche (~19-22 UTC) del mismo día UTC, así que las de la
       noche de ``d`` solo se enlazan con N(d+1) a través de D(d).
 

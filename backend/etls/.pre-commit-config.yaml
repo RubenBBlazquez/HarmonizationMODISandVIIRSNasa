@@ -1,4 +1,4 @@
-# Solo afecta al paquete de ETLs. Ejecutar desde backend/etls/src:
+# Solo afecta al paquete de ETLs. Ejecutar desde backend/etls:
 #   pre-commit run --all-files --config .pre-commit-config.yaml
 files: ^backend/etls/
 repos:

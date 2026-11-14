@@ -1,0 +1,6 @@
+# Dependencias del enriquecimiento de cobertura del suelo con SIGPAC.
+# Alternativa con todo el paquete (incluye estas): pip install -e "src[dev]"
+geopandas>=1.0
+pandas>=2.2
+shapely>=2.0
+pyogrio>=0.7

@@ -1,8 +1,9 @@
 """
 Geometrías de las detecciones: puntos, filtro por área de interés y footprints.
 
-Todos los cálculos de distancia y área se hacen en un CRS métrico (EPSG:3035 o UTM); nunca en
-grados. Las geometrías se almacenan después en EPSG:4326 (ver :mod:`fire_etl.outputs`).
+Todos los cálculos de distancia y área se hacen en un CRS métrico (EPSG:25830 por defecto, o
+UTM); nunca en grados. Las geometrías se almacenan después en EPSG:4326 (ver
+:mod:`fire_etl.outputs`).
 
 Limitación conocida del footprint: se aproxima como un rectángulo alineado a los ejes del CRS
 métrico, de ``scan`` km en X (dirección de barrido, aproximadamente E-O en órbitas polares) por
@@ -104,7 +105,7 @@ def resolve_metric_crs(spec: str, reference: shapely.Geometry | None) -> CRS:
     Parameters
     ----------
     spec : str
-        Código de CRS (p. ej. ``EPSG:3035``) o ``auto`` para la zona UTM del centro de
+        Código de CRS (p. ej. ``EPSG:25830``) o ``auto`` para la zona UTM del centro de
         ``reference``.
     reference : shapely.Geometry | None
         Geometría en EPSG:4326 (área de interés o envolvente de los datos) usada en ``auto``.

@@ -9,14 +9,11 @@ lanza el script. Si lo ejecutas en la consola de Python de PyCharm, al terminar 
 """
 
 import logging
-from pathlib import Path
 
+from _paths import ETLS_DIR, SAMPLE_DIR
 from fire_etl.config import load_config
 from fire_etl.ingest import read_firms_csv
 from fire_etl.pipeline import run_frames
-
-ETLS_DIR = Path(__file__).resolve().parents[1]
-SAMPLE_DIR = ETLS_DIR / "data" / "sample"
 
 # --- Datos de entrada: cámbialos por tus ficheros, o define tú los DataFrames ---------------
 MODIS_FILE = SAMPLE_DIR / "MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt"

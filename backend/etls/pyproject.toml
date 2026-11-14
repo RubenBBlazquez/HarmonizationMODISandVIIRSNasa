@@ -34,6 +34,7 @@ target-version = ["py311"]
 [tool.isort]
 profile = "black"
 line_length = 99
+known_first_party = ["_paths"]
 known_local_folder = ["fire_etl", "tests"]
 
 [tool.pytest.ini_options]
