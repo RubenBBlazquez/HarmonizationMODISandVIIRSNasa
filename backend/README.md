@@ -109,7 +109,7 @@ Railway con tres servicios conectados por la red privada:
 | Servicio   | Origen                                         | Root Directory | Config file              |
 | ---------- | ---------------------------------------------- | -------------- | ------------------------ |
 | `postgis`  | Plantilla **PostGIS** de Railway (con volumen)  | —              | —                        |
-| `api`      | Este repo, `backend/Dockerfile.api`            | `/`            | `/backend/railway.json`  |
+| `api`      | Este repo, `backend/Dockerfile.api`            | `/backend`     | `/backend/railway.json`  |
 | `frontend` | Este repo, `frontend/Dockerfile` (Vite + Caddy) | `/frontend`    | `/frontend/railway.json` |
 
 El Postgres por defecto de Railway no trae PostGIS: usa la plantilla PostGIS (o un servicio con

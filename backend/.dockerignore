@@ -1,0 +1,11 @@
+# Contexto de backend/Dockerfile.api (Root Directory /backend en Railway).
+.venv
+**/__pycache__
+**/.pytest_cache
+*.pyc
+*.pyo
+.env
+etls/data
+etls/output
+etls/clean_data
+etls/.secrets

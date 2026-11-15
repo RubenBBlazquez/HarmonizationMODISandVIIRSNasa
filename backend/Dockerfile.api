@@ -1,5 +1,6 @@
 # Imagen de producción de la API (Railway): solo FastAPI y psycopg, sin el ETL ni sus dependencias
-# geoespaciales. Para desarrollo con docker-compose se usa backend/Dockerfile.
+# geoespaciales. Se construye con backend/ como contexto (Root Directory /backend en Railway), igual
+# que el frontend. Para desarrollo con docker-compose se usa backend/Dockerfile.
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,15 +9,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY backend/requirements-api.txt /app/backend/requirements-api.txt
+COPY requirements-api.txt /app/backend/requirements-api.txt
 RUN pip install -r /app/backend/requirements-api.txt
 
-# Se copia backend/ entero (el .dockerignore deja fuera datos, salidas y entornos) y se comprueba
-# que llegó la API: si falta, el log del build muestra qué ficheros contiene el contexto.
-COPY backend/ /app/backend/
+# El paquete se llama backend (uvicorn backend.main:app): el contexto se copia en /app/backend.
+COPY . /app/backend/
 RUN test -f /app/backend/api/routes.py \
-    || (echo "Falta backend/api en el contexto de build:" && find /app/backend -maxdepth 2 \
-        && exit 1)
+    || (echo "Falta api/ en el contexto de build:" && find /app/backend -maxdepth 2 && exit 1)
 
 EXPOSE 8000
 
