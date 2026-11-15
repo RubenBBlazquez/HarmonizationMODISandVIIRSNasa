@@ -217,7 +217,10 @@ def test_list_remote_zips_decodes_names_and_sizes(monkeypatch):
     monkeypatch.setattr(sigpac_loader.urllib.request, "urlopen", lambda *a, **k: Response())
     remote = sigpac_loader.list_remote_zips("https://example.org/geopackages/2026/recintos/")
 
-    assert [r.name for r in remote] == ["02_ALBACETE_rec_gpkg.zip", "07_ILLES BALEARS_rec_gpkg.zip"]
+    assert [r.name for r in remote] == [
+        "02_ALBACETE_rec_gpkg.zip",
+        "07_ILLES BALEARS_rec_gpkg.zip",
+    ]
     assert remote[1].size == 359506354
     assert remote[1].url == (
         "https://example.org/geopackages/2026/recintos/07_ILLES%20BALEARS_rec_gpkg.zip"
@@ -225,9 +228,7 @@ def test_list_remote_zips_decodes_names_and_sizes(monkeypatch):
 
 
 def test_load_remote_skips_loaded_before_downloading(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        sigpac_loader, "download_zip", lambda *a: pytest.fail("no debe descargar")
-    )
+    monkeypatch.setattr(sigpac_loader, "download_zip", lambda *a: pytest.fail("no debe descargar"))
     remote = sigpac_loader.RemoteZip("20_X_gpkg.zip", "https://x/20.zip", 1)
 
     assert sigpac_loader.load_remote(FakeConnection(loaded=True), remote, tmp_path).skipped

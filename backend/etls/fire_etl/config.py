@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from datetime import date, datetime
 from enum import StrEnum
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +116,24 @@ def _default_non_wildfire_types() -> dict[int, str]:
     return {1: "active_volcano", 2: "static_land_source", 3: "offshore_detection"}
 
 
+def _default_frp_thresholds_mw() -> dict[str, dict[str, float]]:
+    """Umbrales de FRP para ruido y categorías por instrumento, en MW."""
+    return {
+        "VIIRS": {
+            "min_day": 3.7,
+            "min_night": 0.7,
+            "limit_low": 35.0,
+            "limit_medium": 70.0,
+        },
+        "MODIS": {
+            "min_day": 5.7,
+            "min_night": 3.7,
+            "limit_low": 75.0,
+            "limit_medium": 175.0,
+        },
+    }
+
+
 @dataclass(frozen=True)
 class ValidationConfig:
     """Rangos válidos de los campos de entrada."""
@@ -125,15 +144,17 @@ class ValidationConfig:
     track_km_range: tuple[float, float] = (0.1, 10.0)
     frp_min: float = 0.0
     allowed_daynight: tuple[str, ...] = ("D", "N")
-    # Marca como no válidas (is_valid=False, skip_reason="below_frp_threshold") las detecciones por
-    # debajo del FRP mínimo de su instrumento y de día/noche (umbrales en
-    # ``fire_etl/frp_classification.py``). No se descartan, pero se saltan en el resto del flujo.
+    # Marca como no válidas (``is_valid=False``, ``skip_reason="below_frp_threshold"``) las
+    # detecciones por debajo del FRP mínimo de su instrumento y de día/noche. Los umbrales están
+    # en el YAML; los mínimos por defecto se ajustan a la sensibilidad publicada de píxeles
+    # pequeños.
     apply_frp_thresholds: bool = True
+    frp_thresholds_mw: dict[str, dict[str, float]] = field(
+        default_factory=_default_frp_thresholds_mw
+    )
     # Nombres de satélite que se unifican con los de los ficheros NRT (el archivo anual usa
     # "Aqua" / "Terra"; los NRT, "A" / "T"), para que el detection_id no duplique detecciones.
-    satellite_aliases: dict[str, str] = field(
-        default_factory=lambda: {"Aqua": "A", "Terra": "T"}
-    )
+    satellite_aliases: dict[str, str] = field(default_factory=lambda: {"Aqua": "A", "Terra": "T"})
     # Marca como no válidas las detecciones que no son incendios de vegetación: el campo ``type``
     # de FIRMS (solo en los ficheros anuales) distingue 0 = incendio de vegetación presunto de
     # 1 = volcán activo, 2 = fuente terrestre estática (industria) y 3 = detección en el mar.
@@ -149,6 +170,34 @@ class ValidationConfig:
             for zone in self.exclusion_zones
         )
         object.__setattr__(self, "exclusion_zones", zones)
+
+        required_keys = {"min_day", "min_night", "limit_low", "limit_medium"}
+        expected_instruments = {"VIIRS", "MODIS"}
+        if set(self.frp_thresholds_mw) != expected_instruments:
+            raise InvalidConfigError(
+                "validation.frp_thresholds_mw: se requieren exactamente VIIRS y MODIS"
+            )
+
+        thresholds: dict[str, dict[str, float]] = {}
+        for instrument, values in self.frp_thresholds_mw.items():
+            if set(values) != required_keys:
+                raise InvalidConfigError(
+                    f"validation.frp_thresholds_mw.{instrument}: claves {sorted(required_keys)}"
+                )
+            normalized = {key: float(value) for key, value in values.items()}
+            if (
+                not all(isfinite(value) for value in normalized.values())
+                or normalized["min_day"] < 0
+                or normalized["min_night"] < 0
+                or normalized["min_day"] > normalized["limit_low"]
+                or normalized["min_night"] > normalized["limit_low"]
+                or normalized["limit_low"] > normalized["limit_medium"]
+            ):
+                raise InvalidConfigError(
+                    f"validation.frp_thresholds_mw.{instrument}: límites inconsistentes"
+                )
+            thresholds[instrument] = normalized
+        object.__setattr__(self, "frp_thresholds_mw", thresholds)
 
 
 @dataclass(frozen=True)
@@ -408,14 +457,19 @@ class LandCoverConfig:
 
     Attributes
     ----------
+    use_database : bool
+        Si es ``True``, consulta los recintos en ``fire.sigpac_recintos`` (usa ``database.url``)
+        y tiene prioridad sobre ``sigpac_dir``.
     sigpac_dir : str | None
-        Carpeta con los recintos SIGPAC (shapefile / GeoPackage). ``None`` desactiva el paso.
+        Carpeta con los recintos SIGPAC (shapefile / GeoPackage). Sin ``use_database``, ``None``
+        desactiva el paso.
     sigpac_confidence : float
         Confianza asignada a los puntos resueltos con SIGPAC.
     min_confidence : float
         Umbral de confianza para ``is_agricultural`` / ``is_forest``.
     """
 
+    use_database: bool = False
     sigpac_dir: str | None = None
     sigpac_confidence: float = 0.95
     min_confidence: float = 0.0
@@ -462,6 +516,7 @@ class PipelineConfig:
             "modis_nominal_max": self.confidence.modis_nominal_max,
             "single_sensor_high_level": self.confidence.single_sensor_high_level,
             "discard_isolated_low": self.confidence.discard_isolated_low,
+            "frp_thresholds_mw": self.validation.frp_thresholds_mw,
         }
 
     def to_dict(self) -> dict[str, Any]:

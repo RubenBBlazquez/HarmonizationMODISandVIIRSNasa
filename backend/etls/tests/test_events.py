@@ -47,9 +47,7 @@ def test_observations_beyond_link_distance_form_distinct_events(config):
 
 
 def test_non_consecutive_windows_are_not_linked(config):
-    tables = run_rows(
-        config, viirs=[viirs_row("2026-09-13 12:00"), viirs_row("2026-09-15 12:00")]
-    )
+    tables = run_rows(config, viirs=[viirs_row("2026-09-13 12:00"), viirs_row("2026-09-15 12:00")])
 
     assert len(tables.events) == 2
 

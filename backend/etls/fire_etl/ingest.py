@@ -17,9 +17,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from fire_etl.config import ExclusionZone, PipelineConfig, ValidationConfig
 from fire_etl.confidence import normalize_modis_confidence, normalize_viirs_confidence
-from fire_etl.frp_classification import CATEGORIA_DESCARTADO, clasificar_frp
+from fire_etl.config import ExclusionZone, PipelineConfig, ValidationConfig
+from fire_etl.frp_classification import CATEGORY_DISCARDED, classify_frp
 
 LOGGER = logging.getLogger(__name__)
 
@@ -54,8 +54,8 @@ DETECTION_COLUMNS = (
     "track",
     "frp",
     "biomass_kg_s",
-    "frp_clase",
-    "frp_categoria",
+    "frp_class",
+    "frp_category",
     "is_valid",
     "skip_reason",
     "daynight",
@@ -384,8 +384,10 @@ def ingest_frames(raw_frames: Iterable[pd.DataFrame], config: PipelineConfig) ->
     discards.append(summarize_discards(valid["source"], duplicated.map({True: "duplicate"})))
     valid = valid[~duplicated]
 
-    valid = clasificar_frp(valid, col_instrumento="source")
-    noise = valid["frp_categoria"] == CATEGORIA_DESCARTADO
+    valid = classify_frp(
+        valid, instrument_col="source", umbrales=config.validation.frp_thresholds_mw
+    )
+    noise = valid["frp_category"] == CATEGORY_DISCARDED
     if not config.validation.apply_frp_thresholds:
         noise = pd.Series(False, index=valid.index)
 

@@ -2,8 +2,13 @@
 Enriquece coordenadas con la cobertura del suelo usando SIGPAC (recintos del FEGA).
 
 Columnas añadidas (nombres en las constantes de abajo): ``land_cover``,
-``land_cover_confidence``, ``land_cover_source``, ``sigpac_uso``, ``is_agricultural`` e
+``land_cover_confidence``, ``land_cover_source``, ``sigpac_use``, ``is_agricultural`` e
 ``is_forest``. Los puntos que no caen en ningún recinto quedan con los campos vacíos.
+
+Si un punto cae en varios recintos (p. ej. en el límite entre bosque y cultivo), ``land_cover`` y
+``sigpac_use`` contienen todos los valores distintos separados por ``|`` (ordenados, p. ej.
+``crops|trees`` y ``FO|TA``) y las banderas ``is_agricultural`` / ``is_forest`` pueden ser ambas
+``True``.
 
 Land cover: SIGPAC (FEGA / Ministerio de Agricultura, Pesca y Alimentación)
 Revisa las condiciones de reutilización de SIGPAC en el aviso legal del FEGA antes de publicar.
@@ -27,7 +32,7 @@ from shapely.geometry import box
 COL_LAND_COVER = "land_cover"
 COL_CONFIDENCE = "land_cover_confidence"
 COL_SOURCE = "land_cover_source"
-COL_SIGPAC_USO = "sigpac_uso"
+COL_SIGPAC_USO = "sigpac_use"
 COL_IS_AGRICULTURAL = "is_agricultural"
 COL_IS_FOREST = "is_forest"
 NEW_COLUMNS = (
@@ -49,8 +54,20 @@ SIGPAC_USE_FIELDS = ("uso_sigpac", "uso")  # nombres posibles del campo de uso (
 SIGPAC_EXTENSIONS = (".shp", ".gpkg")
 BBOX_PADDING_DEG = 0.01  # margen del bbox con el que se leen los recintos
 
+POSTGIS_CONNECT_TIMEOUT_S = 5
+POSTGIS_CHUNK_POINTS = 50_000  # puntos por consulta
+POSTGIS_QUERY = """
+    SELECT p.i, r.uso_sigpac
+    FROM unnest(%s::int[], %s::float8[], %s::float8[]) AS p(i, lon, lat)
+    JOIN LATERAL (
+        SELECT DISTINCT uso_sigpac FROM fire.sigpac_recintos
+        WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(p.lon, p.lat), 4326))
+    ) r ON true
+"""
+
 SOURCE_SIGPAC = "sigpac"
 OTHER = "other"
+MULTI_SEPARATOR = "|"  # separa varios valores en land_cover / sigpac_use
 
 # --- Normalización de usos SIGPAC (editable) ----------------------------------------------
 SIGPAC_TO_LAND_COVER = {
@@ -252,8 +269,8 @@ def match_sigpac(points: gpd.GeoDataFrame, folder: Path, summary: Summary) -> pd
     """
     Cruza los puntos con los recintos SIGPAC (``sjoin`` con ``within``).
 
-    Cada capa se cruza en su propio CRS. Un punto ya asignado no se vuelve a buscar en las capas
-    siguientes; si cae en varios recintos se queda el primero y se cuenta el aviso.
+    Cada capa se cruza en su propio CRS. Si un punto cae en varios recintos (de la misma capa o
+    de capas distintas) se conservan todos sus códigos de uso distintos.
 
     Parameters
     ----------
@@ -267,19 +284,18 @@ def match_sigpac(points: gpd.GeoDataFrame, folder: Path, summary: Summary) -> pd
     Returns
     -------
     pd.Series
-        Código de uso por posición (solo los puntos con recinto).
+        Lista de códigos de uso por posición (solo los puntos con recinto).
     """
     layers = find_sigpac_layers(folder)
     if not layers:
         LOGGER.warning(f"no hay capas {SIGPAC_EXTENSIONS} en {folder}.")
 
-    uses: dict[int, str] = {}
-    remaining = points
+    uses: dict[int, set[str]] = {}
     for path, layer in layers:
-        if remaining.empty:
+        if points.empty:
             break
 
-        minx, miny, maxx, maxy = remaining.total_bounds
+        minx, miny, maxx, maxy = points.total_bounds
         area = gpd.GeoSeries(
             [box(minx, miny, maxx, maxy).buffer(BBOX_PADDING_DEG)], crs=points.crs
         )
@@ -287,40 +303,100 @@ def match_sigpac(points: gpd.GeoDataFrame, folder: Path, summary: Summary) -> pd
         if recintos is None:
             continue
 
-        joined = gpd.sjoin(remaining.to_crs(recintos.crs), recintos, predicate="within")
-        duplicated = joined.index.duplicated(keep="first")
-        summary.multiple_recintos += int(duplicated.sum())
+        joined = gpd.sjoin(points.to_crs(recintos.crs), recintos, predicate="within")
+        for position, code in joined["uso"].dropna().astype(str).items():
+            uses.setdefault(int(position), set()).add(code)
 
-        first = joined.loc[~duplicated, "uso"].dropna().astype(str)
-        uses.update(first.to_dict())
-        remaining = remaining.drop(index=first.index)
+    return _multi_use_series(uses, summary)
 
+
+def _multi_use_series(uses: dict[int, set[str]], summary: Summary) -> pd.Series:
+    """Convierte ``{posición: {códigos}}`` en una Serie de listas ordenadas (cuenta múltiples)."""
+    series = pd.Series({i: sorted(codes) for i, codes in uses.items()}, dtype="object")
+    summary.multiple_recintos = int(sum(len(codes) > 1 for codes in series))
     if summary.multiple_recintos:
         LOGGER.warning(
-            f"{summary.multiple_recintos} puntos caen en varios recintos; se usa el 1.º."
+            f"{summary.multiple_recintos} puntos caen en varios usos; se guardan todos con "
+            f"'{MULTI_SEPARATOR}'."
         )
 
-    return pd.Series(uses, dtype="object")
+    return series
+
+
+def match_postgis(points: gpd.GeoDataFrame, url: str, summary: Summary) -> pd.Series:
+    """
+    Cruza los puntos con ``fire.sigpac_recintos`` en PostGIS (``ST_Intersects`` con índice GiST).
+
+    Si la base de datos no está disponible se registra el error y no se asigna ningún punto.
+
+    Parameters
+    ----------
+    points : gpd.GeoDataFrame
+        Puntos válidos en EPSG:4326, indexados por su posición en el fichero.
+    url : str
+        URL de conexión a PostgreSQL/PostGIS.
+    summary : Summary
+        Se actualiza ``multiple_recintos``.
+
+    Returns
+    -------
+    pd.Series
+        Lista de códigos de uso por posición (solo los puntos con recinto).
+    """
+    try:
+        import psycopg
+    except ImportError:
+        LOGGER.error("Falta el driver: pip install 'psycopg[binary]'. SIGPAC no se aplica.")
+        return pd.Series(dtype="object")
+
+    uses: dict[int, set[str]] = {}
+    positions = points.index.to_list()
+    lons = points.geometry.x.to_list()
+    lats = points.geometry.y.to_list()
+    try:
+        with psycopg.connect(url, connect_timeout=POSTGIS_CONNECT_TIMEOUT_S) as connection:
+            with connection.cursor() as cursor:
+                for start in range(0, len(positions), POSTGIS_CHUNK_POINTS):
+                    stop = start + POSTGIS_CHUNK_POINTS
+                    cursor.execute(
+                        POSTGIS_QUERY,
+                        (positions[start:stop], lons[start:stop], lats[start:stop]),
+                    )
+                    for i, uso in cursor.fetchall():
+                        if uso:
+                            uses.setdefault(int(i), set()).add(str(uso))
+    except Exception as error:  # BD caída o tabla ausente: el pipeline continúa sin SIGPAC
+        LOGGER.error(f"no se pudo consultar SIGPAC en PostGIS: {error}")
+        return pd.Series(dtype="object")
+
+    return _multi_use_series(uses, summary)
 
 
 # --- Composición del resultado -------------------------------------------------------------
 
 
 def flags(land_cover: pd.Series, confidence: pd.Series, min_confidence: float) -> tuple:
-    """``is_agricultural`` e ``is_forest`` (booleanos; vacíos si no hay clase)."""
+    """
+    ``is_agricultural`` e ``is_forest`` (booleanos; vacíos si no hay clase).
+
+    ``land_cover`` puede traer varias clases separadas por ``|``: la bandera es ``True`` si la
+    clase está entre ellas (un punto entre bosque y cultivo es ``True`` en ambas).
+    """
     confident = confidence >= min_confidence
     no_data = land_cover.isna()
-    is_agricultural = ((land_cover == "crops") & confident).astype("boolean")
-    is_forest = ((land_cover == "trees") & confident).astype("boolean")
+    classes = land_cover.fillna("").str.split(MULTI_SEPARATOR, regex=False)
+    is_agricultural = (classes.map(lambda c: "crops" in c) & confident).astype("boolean")
+    is_forest = (classes.map(lambda c: "trees" in c) & confident).astype("boolean")
 
     return is_agricultural.mask(no_data), is_forest.mask(no_data)
 
 
 def enrich(
     df: pd.DataFrame,
-    sigpac_dir: Path,
+    sigpac_dir: Path | None = None,
     sigpac_confidence: float = SIGPAC_CONFIDENCE,
     min_confidence: float = FLAG_MIN_CONFIDENCE,
+    database_url: str | None = None,
 ) -> tuple[pd.DataFrame, Summary]:
     """
     Añade las columnas de cobertura del suelo a una copia de ``df``.
@@ -329,12 +405,15 @@ def enrich(
     ----------
     df : pd.DataFrame
         Puntos con ``lat`` / ``lon`` (o geometría).
-    sigpac_dir : Path
-        Carpeta con los recintos SIGPAC (shapefile o GeoPackage).
+    sigpac_dir : Path | None
+        Carpeta con los recintos SIGPAC (shapefile o GeoPackage). Se ignora si hay
+        ``database_url``.
     sigpac_confidence : float
         Confianza de los puntos resueltos con SIGPAC.
     min_confidence : float
         Umbral de confianza para ``is_agricultural`` / ``is_forest``.
+    database_url : str | None
+        Si se indica, los recintos se consultan en ``fire.sigpac_recintos`` (PostGIS).
 
     Returns
     -------
@@ -350,19 +429,27 @@ def enrich(
     land_cover = pd.Series(None, index=lats.index, dtype="object")
     confidence = pd.Series(np.nan, index=lats.index, dtype="float64")
     source = pd.Series(None, index=lats.index, dtype="object")
-    sigpac_uso = pd.Series(None, index=lats.index, dtype="object")
+    sigpac_use = pd.Series(None, index=lats.index, dtype="object")
 
     valid_index = lats.index[valid.to_numpy()]
     points = gpd.GeoDataFrame(
         geometry=gpd.points_from_xy(lons[valid], lats[valid]), index=valid_index, crs=4326
     )
-    uses = match_sigpac(points, sigpac_dir, summary)
+    if database_url:
+        uses = match_postgis(points, database_url, summary)
+    elif sigpac_dir is not None:
+        uses = match_sigpac(points, sigpac_dir, summary)
+    else:
+        raise LandCoverError("Indica 'database_url' o 'sigpac_dir'.")
     unknown = set()
-    for position, code in uses.items():
-        land_cover[position], known = normalize_sigpac_use(code)
-        sigpac_uso[position] = code.strip().upper()
-        if not known:
-            unknown.add(sigpac_uso[position])
+    for position, codes in uses.items():
+        normalized = [normalize_sigpac_use(code) for code in codes]
+        cleaned = sorted({code.strip().upper() for code in codes})
+        land_cover[position] = MULTI_SEPARATOR.join(sorted({cls for cls, _ in normalized}))
+        sigpac_use[position] = MULTI_SEPARATOR.join(cleaned)
+        unknown.update(
+            code.strip().upper() for code, (_, known) in zip(codes, normalized) if not known
+        )
 
     confidence[uses.index] = sigpac_confidence
     source[uses.index] = SOURCE_SIGPAC
@@ -378,7 +465,7 @@ def enrich(
         (COL_LAND_COVER, land_cover),
         (COL_CONFIDENCE, confidence),
         (COL_SOURCE, source),
-        (COL_SIGPAC_USO, sigpac_uso),
+        (COL_SIGPAC_USO, sigpac_use),
         (COL_IS_AGRICULTURAL, is_agricultural),
         (COL_IS_FOREST, is_forest),
     ):

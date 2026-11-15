@@ -10,7 +10,7 @@ reproducen el esquema PostGIS de `backend/databases/postgis/init/01_schema.sql`.
 
 ```
 backend/etls/
-├── pyproject.toml  .flake8  .pre-commit-config.yaml  requirements.txt
+├── pyproject.toml  .flake8  requirements.txt  (el .pre-commit-config.yaml está en la raíz)
 ├── config/default.yaml        # TODOS los parámetros del algoritmo
 ├── data/sample/               # 20 filas reales de MODIS (MCD14DL) y 20 de VIIRS NOAA-20 (VJ114IMGTDL)
 ├── scripts/                   # run_pipeline.py, validate_real_fire.py (+ _paths.py)
@@ -61,7 +61,7 @@ fire-etl --config config/default.yaml \
   --output-dir output
 
 pytest --cov=fire_etl
-pre-commit run --all-files --config .pre-commit-config.yaml
+pre-commit run --all-files     # desde cualquier carpeta del repo; solo revisa backend/etls
 ```
 
 ## Diseño
@@ -146,16 +146,17 @@ algoritmo ni detecciones que no pertenezcan a un evento. Se genera en cada ejecu
 
 Propiedades de cada evento: `event_id`, `status` (`active`/`closed`), `first_detection`,
 `last_detection`, `duration_hours`, `lat`, `lon`, `n_detections`, `sensors`, `frp_max_mw`,
-`frp_category` (`baja`/`media`/`alta`), `biomass_max_kg_s`, `confidence`, `footprint_area_km2`,
+`frp_category` (`low`/`medium`/`high`), `biomass_max_kg_s`, `confidence`, `footprint_area_km2`,
 `land_cover`, `is_agricultural`, `is_forest` y `summary`. Fechas en UTC
 (`2026-11-14T02:15:00Z`), coordenadas en EPSG:4326 (`[lon, lat]` en GeoJSON) y nulos como `null`.
 
 **Qué se considera ruido y no llega aquí:**
-- Detecciones por debajo del FRP mínimo de su instrumento y de día/noche (VIIRS: 15 MW de día y
-  6 MW de noche; MODIS: 30 y 12). **No se descartan, se marcan**: en `output/detections.parquet`
+- Detecciones por debajo del FRP mínimo de su instrumento y de día/noche:
+  VIIRS: 3,7 MW de día y 0,7 MW de noche; MODIS: 5,7 y 3,7. **No se descartan, se marcan**: en
+  `output/detections.parquet`
   llevan `is_valid = false` y `skip_reason = "below_frp_threshold"` (en las demás,
   `is_valid = true` y `skip_reason = null`). Se saltan en las observaciones y los eventos. Los
-  umbrales están en `fire_etl/frp_classification.py` y se desactivan con
+  umbrales están en `validation.frp_thresholds_mw` de la configuración YAML y se desactivan con
   `validation.apply_frp_thresholds: false`. El número de marcadas queda en
   `run_parameters.json` como `skipped_detections`.
 - Observaciones `low` aisladas (un solo sensor y confianza baja).
@@ -333,7 +334,7 @@ Otras opciones: `--force`, `--keep-zips`, `--download-dir`, `--work-dir`. Los zi
 
 ## Cobertura del suelo con SIGPAC
 
-> **Si `land_cover`, `land_cover_confidence`, `sigpac_uso`, `is_agricultural` e `is_forest` salen
+> **Si `land_cover`, `land_cover_confidence`, `sigpac_use`, `is_agricultural` e `is_forest` salen
 > vacíos es porque este paso está desactivado** (`land_cover.sigpac_dir: null`) **o porque no hay
 > recintos SIGPAC en disco.** No los descarga el pipeline: hay que bajarlos del FEGA, descomprimirlos
 > y apuntar `sigpac_dir` a esa carpeta. Con el paso desactivado el pipeline lo avisa en el log
@@ -341,7 +342,7 @@ Otras opciones: `--force`, `--keep-zips`, `--download-dir`, `--work-dir`. Los zi
 
 Paso opcional del pipeline principal: si `land_cover.sigpac_dir` apunta a una carpeta con los
 recintos SIGPAC (`.shp` / `.gpkg` descargados del FEGA; no se descargan), cada detección recibe
-`land_cover`, `land_cover_confidence`, `land_cover_source` (`sigpac`), `sigpac_uso`,
+`land_cover`, `land_cover_confidence`, `land_cover_source` (`sigpac`), `sigpac_use`,
 `is_agricultural` e `is_forest`, y se escriben en `detections.parquet`. Con `sigpac_dir: null`
 (por defecto) el paso no se ejecuta.
 

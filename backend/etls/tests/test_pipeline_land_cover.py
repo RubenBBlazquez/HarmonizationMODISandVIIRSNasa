@@ -27,9 +27,7 @@ def _sigpac_folder(tmp_path):
 
 def test_pipeline_adds_land_cover_columns_to_detections(config, tmp_path):
     config = replace(config, land_cover=LandCoverConfig(sigpac_dir=str(_sigpac_folder(tmp_path))))
-    tables = process_detections(
-        ingest_rows(config, modis=[modis_row("2026-09-15 12:00")]), config
-    )
+    tables = process_detections(ingest_rows(config, modis=[modis_row("2026-09-15 12:00")]), config)
 
     row = tables.detections.iloc[0]
     assert row["land_cover"] == "trees" and bool(row["is_forest"])

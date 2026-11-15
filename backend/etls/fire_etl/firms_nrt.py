@@ -27,13 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fire_etl.config import NrtConfig
-from fire_etl.firms_download import (
-    DOWNLOADED,
-    MISSING,
-    USER_AGENT,
-    fetch_to_file,
-    with_retries,
-)
+from fire_etl.firms_download import DOWNLOADED, MISSING, USER_AGENT, fetch_to_file, with_retries
 
 LOGGER = logging.getLogger(__name__)
 
@@ -344,4 +338,3 @@ def download_nrt(
 def nrt_files(directory: str | Path) -> list[Path]:
     """Ficheros NRT ya en disco (aunque esta ejecución no haya podido descargar)."""
     return sorted(Path(directory).glob("*.txt"))
-

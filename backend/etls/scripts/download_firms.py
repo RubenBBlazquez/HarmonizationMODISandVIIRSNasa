@@ -23,6 +23,7 @@ import logging
 from datetime import timedelta
 
 from _paths import ETLS_DIR
+
 from fire_etl.config import load_config
 from fire_etl.firms_download import download_all
 from fire_etl.firms_nrt import download_nrt, first_uncovered_day, nrt_files
@@ -44,8 +45,10 @@ for url, reason in result.failed.items():
 print(f"Ficheros en {RAW_DIR}: {len(result.available)}")
 
 nrt = download_nrt(config.nrt, NRT_DIR, base_dir=ETLS_DIR)
-print(f"\nNRT: descargados {len(nrt.downloaded)} | sin cambios {len(nrt.skipped)} | "
-      f"fallidos {len(nrt.failed)} | ficheros en {NRT_DIR}: {len(nrt_files(NRT_DIR))}")
+print(
+    f"\nNRT: descargados {len(nrt.downloaded)} | sin cambios {len(nrt.skipped)} | "
+    f"fallidos {len(nrt.failed)} | ficheros en {NRT_DIR}: {len(nrt_files(NRT_DIR))}"
+)
 if nrt.token_missing:
     print(f"  Sin NRT: pon el token en la variable {config.nrt.token_env}")
     print(f"  o en el fichero local {config.nrt.token_file} (ignorado por git).")

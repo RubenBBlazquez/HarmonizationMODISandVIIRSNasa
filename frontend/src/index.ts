@@ -1,28 +1,27 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+import { MAX_CARDS, openModal, renderCards, summaryTableHtml } from "./fireCards.js";
 import {
-  BIOMASS_HELP,
   CONFIDENCE_COLORS,
   DETECTION_HELP,
   EVENT_COLORS,
   FRP_COLORS,
   HISTORY_YEARS,
   NO_CATEGORY_COLOR,
-  PIXEL_BORDER_COLOR,
-  PIXEL_FILL_OPACITY,
-  biomassLabel,
+  pixelStyle,
   detectionPopup,
+  bindPinnableTooltip,
+  sortByConfidence,
   detectionTooltip,
+  enableTooltipPinning,
   escapeHtml,
   eventPopup,
   fetchJson,
   firesPageUrl,
   formatDay,
-  sensorsLabel,
   formatDayMonth,
   formatNumber,
-  zoneDetectionsLabel,
   type FireCollection,
   type HistoryResponse,
 } from "./shared.js";
@@ -38,8 +37,6 @@ const DEFAULT_RANGE_DAYS = 365;
 // (a zoom bajo un píxel de 0,4-1 km mide menos de 1 px y no se vería).
 const PIXEL_MIN_ZOOM = 10;
 // Selección de zona con el ratón y búsquedas sobre ese recuadro.
-const ZONE_EVENT_LIMIT = 500;
-const LIST_ITEMS = 15;
 const SELECTION_STYLE: L.PathOptions = {
   color: "#e2603a",
   weight: 2,
@@ -47,12 +44,11 @@ const SELECTION_STYLE: L.PathOptions = {
   fillOpacity: 0.35,
   interactive: false,
 };
-const HISTORY_COLOR = "#7b4fbf";
 // Leyenda interactiva: cada elemento se puede ocultar/mostrar pulsándolo.
 const LEGEND_ITEMS = [
-  { key: "frp:baja", label: "Detección FRP baja", color: FRP_COLORS.baja },
-  { key: "frp:media", label: "Detección FRP media", color: FRP_COLORS.media },
-  { key: "frp:alta", label: "Detección FRP alta", color: FRP_COLORS.alta },
+  { key: "frp:low", label: "Detección FRP baja", color: FRP_COLORS.low },
+  { key: "frp:medium", label: "Detección FRP media", color: FRP_COLORS.medium },
+  { key: "frp:high", label: "Detección FRP alta", color: FRP_COLORS.high },
   { key: "status:active", label: "Evento activo", color: EVENT_COLORS.active },
   { key: "status:closed", label: "Evento cerrado", color: EVENT_COLORS.closed },
 ];
@@ -71,11 +67,34 @@ interface Summary {
   active_events: number;
 }
 
+// Último rango elegido, recordado entre visitas.
+const RANGE_STORAGE_KEY = "fire-map:date-range";
+
+function saveRange(range: { start: string; end: string } | null): void {
+  try {
+    if (range) localStorage.setItem(RANGE_STORAGE_KEY, JSON.stringify(range));
+    else localStorage.removeItem(RANGE_STORAGE_KEY);
+  } catch {
+    // localStorage no disponible: simplemente no se recuerda.
+  }
+}
+
+function loadRange(): { start: string; end: string } | null {
+  try {
+    const range = JSON.parse(localStorage.getItem(RANGE_STORAGE_KEY) ?? "null");
+    const valid = (day: unknown): boolean => typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day);
+    return range && valid(range.start) && valid(range.end) && range.start <= range.end ? range : null;
+  } catch {
+    return null;
+  }
+}
+
 const mapContainer = document.querySelector<HTMLElement>(".map");
 if (mapContainer) {
   mapContainer.id = "map";
   mapContainer.innerHTML = ""; // quita el dibujo decorativo de la maqueta
   const map = L.map(mapContainer, { preferCanvas: true }).setView(SPAIN_CENTER, SPAIN_ZOOM);
+  enableTooltipPinning(map);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
@@ -91,6 +110,8 @@ if (mapContainer) {
       <label><span><input type="checkbox" id="layer-events" checked> Eventos</span></label>
       <label><span><input type="checkbox" id="layer-detections" checked> Detecciones válidas</span></label>
       <div class="date-field"><span>Fechas</span><div id="date-range"></div></div>
+      <button type="button" class="play-btn" id="play-btn"
+        title="Muestra día a día cómo avanzan los incendios del rango elegido"></button>
       <button type="button" class="select-area" id="select-area"
         title="Dibuja un recuadro en el mapa. También: mantén Ctrl y arrastra"></button>
       <div class="map-status" id="map-status">Cargando…</div>`;
@@ -148,9 +169,11 @@ if (mapContainer) {
   const eventsToggle = document.querySelector<HTMLInputElement>("#layer-events")!;
   const detectionsToggle = document.querySelector<HTMLInputElement>("#layer-detections")!;
   // Un único selector para el rango: primer clic, día inicial; segundo clic, día final.
-  const picker = new DateRangePicker(document.querySelector<HTMLElement>("#date-range")!, () =>
-    scheduleRefresh(),
-  );
+  const picker = new DateRangePicker(document.querySelector<HTMLElement>("#date-range")!, (range) => {
+    stopPlayback();
+    saveRange(range);
+    scheduleRefresh();
+  });
   const rangeStart = (): string => picker.value?.start ?? "";
   const rangeEnd = (): string => picker.value?.end ?? "";
   const statusElement = document.querySelector<HTMLElement>("#map-status")!;
@@ -215,23 +238,24 @@ if (mapContainer) {
     detectionsLayer.clearLayers();
     if (!collection) return;
     detectionsLayer.addLayer(
-      L.geoJSON(collection as GeoJSON.FeatureCollection, {
+      L.geoJSON(sortByConfidence(collection as GeoJSON.FeatureCollection), {
         filter: (feature) => !hiddenKeys.has(`frp:${feature.properties?.frp_category}`),
         pointToLayer: (_feature, latlng) => L.circleMarker(latlng, { radius: 4 }),
         // `style` se aplica tanto a los polígonos (píxeles) como a los círculos (puntos).
-        style: (feature) => ({
-          weight: asPixels ? 1 : 0.5,
-          color: asPixels ? PIXEL_BORDER_COLOR : "#ffffff",
-          fillColor: FRP_COLORS[String(feature?.properties?.frp_category)] ?? NO_CATEGORY_COLOR,
-          fillOpacity: asPixels ? PIXEL_FILL_OPACITY : 0.8,
-        }),
+        style: (feature) =>
+          asPixels
+            ? pixelStyle(feature)
+            : {
+                weight: 0.5,
+                color: "#ffffff",
+                fillColor:
+                  FRP_COLORS[String(feature?.properties?.frp_category)] ?? NO_CATEGORY_COLOR,
+                fillOpacity: 0.8,
+              },
         onEachFeature: (feature, layer) => {
           layer.bindPopup(detectionPopup(feature.properties));
           // Al pasar el ratón por el área: sensor, satélite y fecha (día-mes-año), pegado al cursor.
-          layer.bindTooltip(detectionTooltip(feature.properties), {
-            sticky: true,
-            direction: "top",
-          });
+          bindPinnableTooltip(layer, detectionTooltip(feature.properties));
         },
       }),
     );
@@ -282,9 +306,18 @@ if (mapContainer) {
   }
 
   /** Vuelve a dibujar lo último cargado (al cambiar lo que oculta la leyenda). */
+  // Con la reproducción activa solo se dibuja lo ocurrido hasta `playDay` (acumulado).
+  let playDay: string | null = null;
+  const upTo = (collection: FireCollection | null, field: string): FireCollection | null => {
+    if (!collection || !playDay) return collection;
+    const features = collection.features.filter(
+      (feature) => String(feature.properties?.[field] ?? "9999").slice(0, 10) <= playDay!,
+    );
+    return { ...collection, features, count: features.length };
+  };
   function redraw(): void {
-    drawEvents(lastEvents);
-    drawDetections(lastDetections, lastAsPixels);
+    drawEvents(upTo(lastEvents, "first_detection"));
+    drawDetections(upTo(lastDetections, "acq_datetime"), lastAsPixels);
   }
 
   // --- Carga de datos: solo lo visible, con las fechas elegidas -----------------------------
@@ -327,6 +360,66 @@ if (mapContainer) {
     }
   }
 
+  // --- Reproducción: avanza un día por segundo dentro del rango elegido ----------------------
+  const PLAY_STEP_MS = 1000;
+  const playButton = document.querySelector<HTMLButtonElement>("#play-btn")!;
+  let playTimer: number | undefined;
+  const PLAY_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"
+    aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg>`;
+  const STOP_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"
+    aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>`;
+  playButton.innerHTML = `${PLAY_ICON}<span>Ver avance día a día</span>`;
+
+  function stopPlayback(): void {
+    window.clearTimeout(playTimer);
+    playTimer = undefined;
+    if (playDay === null) return;
+    playDay = null;
+    playButton.classList.remove("playing");
+    playButton.innerHTML = `${PLAY_ICON}<span>Ver avance día a día</span>`;
+    redraw();
+    scheduleRefresh(); // recupera el estado de estado/contadores
+  }
+
+  async function startPlayback(): Promise<void> {
+    if (!rangeStart() || !rangeEnd()) {
+      statusElement.textContent = "Elige un rango de fechas para ver el avance";
+      return;
+    }
+    const first = rangeStart();
+    const last = rangeEnd();
+    playButton.classList.add("playing");
+    playButton.innerHTML = `${STOP_ICON}<span>Detener</span>`;
+    playDay = first;
+    window.clearTimeout(timer);
+    await refresh(); // carga de una vez todo el rango; los días se filtran sin pedir más datos
+    if (playDay === null) return; // detenido mientras cargaba
+    const step = (): void => {
+      if (playDay === null) return;
+      redraw();
+      const shown = (lastEvents ? upTo(lastEvents, "first_detection")!.count : 0) +
+        (lastDetections ? upTo(lastDetections, "acq_datetime")!.count : 0);
+      statusElement.textContent = `Avance: ${formatDay(playDay)} (hasta ${formatDay(last)}) · ${formatNumber(shown)} elementos`;
+      if (playDay >= last) {
+        playTimer = undefined;
+        playButton.classList.remove("playing");
+        playButton.innerHTML = `${PLAY_ICON}<span>Repetir avance</span>`;
+        return; // se queda mostrando el rango completo; pulsar de nuevo vuelve a empezar
+      }
+      playDay = addDays(playDay, 1);
+      playTimer = window.setTimeout(step, PLAY_STEP_MS);
+    };
+    step();
+  }
+
+  playButton.addEventListener("click", () => {
+    if (playButton.classList.contains("playing")) stopPlayback();
+    else {
+      playDay = null;
+      void startPlayback();
+    }
+  });
+
   function scheduleRefresh(): void {
     window.clearTimeout(timer);
     timer = window.setTimeout(() => void refresh(), REFRESH_DELAY_MS);
@@ -344,7 +437,9 @@ if (mapContainer) {
       if (summary.first_detection && summary.last_detection) {
         const last = summary.last_detection.slice(0, 10);
         picker.setBounds(summary.first_detection.slice(0, 10), last);
-        picker.setRange({ start: addDays(last, -(DEFAULT_RANGE_DAYS - 1)), end: last });
+        picker.setRange(
+          loadRange() ?? { start: addDays(last, -(DEFAULT_RANGE_DAYS - 1)), end: last },
+        );
       }
     } catch {
       // Sin resumen: se muestran todas las fechas y refresh() informará del error.
@@ -354,119 +449,21 @@ if (mapContainer) {
   void start();
 
   // --- Selección de zona: arrastrar un recuadro y elegir qué buscar en él ---------------------
-  const historyLayer = L.layerGroup().addTo(map);
   let selecting = false;
   let anchor: L.LatLng | null = null;
   let selection: L.Rectangle | null = null;
 
-  const results = new L.Control({ position: "bottomleft" });
-  results.onAdd = () => {
-    const element = L.DomUtil.create("div", "results-control");
-    element.hidden = true;
-    L.DomEvent.disableClickPropagation(element);
-    L.DomEvent.disableScrollPropagation(element);
-    return element;
-  };
-  results.addTo(map);
-  const resultsElement = document.querySelector<HTMLElement>(".results-control")!;
-
-  function hideResults(): void {
-    resultsElement.hidden = true;
-    historyLayer.clearLayers();
-  }
-
-  function showResults(title: string, body: string): void {
-    resultsElement.innerHTML = `
-      <div class="results-head"><b>${escapeHtml(title)}</b>
-        <button type="button" class="results-close" aria-label="Cerrar">✕</button></div>
-      <div class="results-body">${body}</div>`;
-    resultsElement.hidden = false;
-    resultsElement.querySelector(".results-close")?.addEventListener("click", hideResults);
-    // Cada incendio de la lista centra el mapa en él.
-    resultsElement.querySelectorAll<HTMLButtonElement>("button[data-lat]").forEach((button) =>
-      button.addEventListener("click", () =>
-        map.flyTo([Number(button.dataset.lat), Number(button.dataset.lon)], 12),
-      ),
-    );
-  }
-
-  function eventList(features: FireCollection["features"], withPeriod: boolean): string {
-    if (features.length === 0) return "<p>No hay incendios.</p>";
-    const items = features.map((feature) => {
-      const [lon, lat] = (feature.geometry as GeoJSON.Point).coordinates;
-      const properties = feature.properties;
-      const period = withPeriod ? `<b>${escapeHtml(properties.period)}</b> · ` : "";
-      return `<li><button type="button" data-lat="${lat}" data-lon="${lon}">${period}
-        ${formatDay(properties.first_detection)} · ${zoneDetectionsLabel(properties)} ·
-        FRP máx. ${escapeHtml(properties.zone_frp_max_mw ?? properties.frp_max_mw)} MW ·
-        biomasa ${biomassLabel(properties.biomass_burned_kg)}</button></li>`;
-    });
-    return `<ol class="results-list">${items.join("")}</ol>`;
-  }
-
-  function periodText(): string {
-    if (rangeStart() && rangeEnd()) {
-      return `entre ${formatDay(rangeStart())} y ${formatDay(rangeEnd())}`;
-    }
-    return "en todas las fechas";
-  }
-
-  async function showZoneEvents(bounds: L.LatLngBounds): Promise<void> {
-    const title = "Incendios en la zona";
-    const params: Record<string, string> = {
-      bbox: bounds.toBBoxString(),
-      limit: String(ZONE_EVENT_LIMIT),
-      match: "inside", // solo incendios con detecciones dentro del recuadro dibujado
-    };
-    if (rangeStart()) params.start = rangeStart();
-    if (rangeEnd()) params.end = rangeEnd();
-
-    showResults(title, "<p>Buscando…</p>");
-    try {
-      const data = await fetchJson<FireCollection>("/events", params);
-      const inZone = (feature: FireCollection["features"][number]): number =>
-        Number(feature.properties.zone_detections ?? feature.properties.n_detections);
-      const largest = [...data.features].sort((a, b) => inZone(b) - inZone(a)).slice(0, LIST_ITEMS);
-      const tab = { mode: "zone", ...params };
-      const header = `<p>${formatNumber(data.total)} incendios con detecciones dentro del
-        recuadro ${periodText()}.
-        <a class="open-tab" href="${firesPageUrl(tab)}" target="_blank" rel="noopener">
-        Ver todos con sus mapas en una pestaña ↗</a></p>
-        <p class="results-help">${DETECTION_HELP}</p>
-        <p class="results-help">${BIOMASS_HELP}</p><p>Los mayores:</p>`;
-      showResults(title, header + eventList(largest, false));
-    } catch (error) {
-      showResults(title, `<p>${escapeHtml((error as Error).message)}</p>`);
-    }
-  }
-
-  function drawHistory(collection: HistoryResponse["events"]): void {
-    historyLayer.clearLayers();
-    historyLayer.addLayer(
-      L.geoJSON(collection as GeoJSON.FeatureCollection, {
-        pointToLayer: (_feature, latlng) => L.circleMarker(latlng, { radius: 7 }),
-        style: () => ({ color: HISTORY_COLOR, weight: 2, fillColor: HISTORY_COLOR, fillOpacity: 0.3 }),
-        onEachFeature: (feature, layer) => {
-          layer.bindPopup(eventPopup(feature.properties));
-          layer.bindTooltip(
-            `${feature.properties.period} · ${formatDay(feature.properties.first_detection)} · ` +
-              sensorsLabel(feature.properties.sensors),
-            { sticky: true, direction: "top" },
-          );
-        },
-      }),
-    );
-  }
-
-  // "Similares": misma zona y mismas fechas del año en los años anteriores.
+  // "Similares": misma zona y mismas fechas del año en los años anteriores, en un popup grande
+  // con el resumen por años y el mapa de cada incendio (un clic en un mapa lo amplía).
   async function showHistory(bounds: L.LatLngBounds): Promise<void> {
     const title = "Incendios similares en años anteriores";
+    const modal = openModal(title);
     if (!rangeStart() || !rangeEnd()) {
-      showResults(title, "<p>Elige las fechas Desde y Hasta para comparar con años anteriores.</p>");
+      modal.body.innerHTML =
+        "<p>Elige las fechas Desde y Hasta para comparar con años anteriores.</p>";
       return;
     }
-
-    showResults(title, "<p>Buscando…</p>");
+    modal.body.innerHTML = '<p class="modal-status">Buscando…</p>';
     try {
       const query = {
         bbox: bounds.toBBoxString(),
@@ -474,38 +471,28 @@ if (mapContainer) {
         end: rangeEnd(),
         years: String(HISTORY_YEARS),
       };
-      const data = await fetchJson<HistoryResponse>("/history", query);
-      drawHistory(data.events);
-      const rows = data.periods.map(
-        (period) => `<tr class="${period.is_reference ? "reference" : ""}">
-          <td>${escapeHtml(period.label)}${period.is_reference ? " (elegido)" : ""}</td>
-          <td>${formatNumber(period.events)}</td><td>${formatNumber(period.detections)}</td>
-          <td>${period.frp_max_mw ?? "—"}</td></tr>`,
-      );
-      const criteria = `<p>Incendios con detecciones dentro del recuadro, en las mismas fechas
-        (${formatDayMonth(rangeStart())} →
-        ${formatDayMonth(rangeEnd())}) en los ${HISTORY_YEARS} años anteriores.
-        En morado en el mapa.
-        <a class="open-tab" href="${firesPageUrl({ mode: "history", ...query })}" target="_blank"
-        rel="noopener">Ver todos con sus mapas en una pestaña ↗</a></p>
-        <p class="results-help">${DETECTION_HELP}</p>`;
-      const table = `<table class="results-table"><thead><tr><th>Periodo</th><th>Incendios</th>
-        <th>Detecciones en la zona</th><th>FRP máx. en la zona (MW)</th></tr></thead>
-        <tbody>${rows.join("")}</tbody></table>`;
-      const list = `<p><b>Mayores incendios de años anteriores</b></p>${eventList(
-        data.events.features.slice(0, LIST_ITEMS),
-        true,
-      )}`;
-      showResults(title, criteria + table + list);
+      const data = await fetchJson<HistoryResponse>("/history", { ...query, limit: String(MAX_CARDS) });
+      const shown = Math.min(data.events.features.length, MAX_CARDS);
+      modal.body.innerHTML = `
+        <p class="modal-criteria">Incendios con detecciones dentro del recuadro, en las mismas fechas
+          (${formatDayMonth(rangeStart())} → ${formatDayMonth(rangeEnd())}) en los
+          ${HISTORY_YEARS} años anteriores.
+          <a href="${firesPageUrl({ mode: "history", ...query })}" target="_blank"
+          rel="noopener">Abrir en una pestaña ↗</a></p>
+        <p class="modal-help">${escapeHtml(DETECTION_HELP)}<br>*La huella no es superficie quemada.
+          Pulsa un mapa para verlo más grande.</p>
+        <table class="summary">${summaryTableHtml(data.periods)}</table>
+        <p class="modal-status">${formatNumber(shown)} incendios de años anteriores, los mayores primero.</p>
+        <section class="grid"></section>`;
+      renderCards(modal.body.querySelector<HTMLElement>(".grid")!, data.events.features, true);
     } catch (error) {
-      showResults(title, `<p>${escapeHtml((error as Error).message)}</p>`);
+      modal.body.innerHTML = `<p>${escapeHtml((error as Error).message)}</p>`;
     }
   }
 
   function clearSelection(): void {
     selection?.remove();
     selection = null;
-    hideResults();
   }
 
   function openSelectionMenu(bounds: L.LatLngBounds): void {
@@ -515,17 +502,13 @@ if (mapContainer) {
       <b>Zona seleccionada</b>
       <small>Lat ${bounds.getSouth().toFixed(3)} a ${bounds.getNorth().toFixed(3)} ·
         Lon ${bounds.getWest().toFixed(3)} a ${bounds.getEast().toFixed(3)}</small>
-      <button type="button" data-action="zone">Incendios en esta zona (fechas elegidas)</button>
       <button type="button" data-action="history">Incendios similares en los últimos ${HISTORY_YEARS} años</button>
-      <button type="button" data-action="zoom">Acercar a la zona</button>
       <button type="button" data-action="clear">Quitar selección</button>`;
     element.querySelectorAll<HTMLButtonElement>("button[data-action]").forEach((button) =>
       button.addEventListener("click", () => {
         map.closePopup();
         const action = button.dataset.action;
-        if (action === "zone") void showZoneEvents(bounds);
-        else if (action === "history") void showHistory(bounds);
-        else if (action === "zoom") map.fitBounds(bounds);
+        if (action === "history") void showHistory(bounds);
         else clearSelection();
       }),
     );
@@ -554,7 +537,10 @@ if (mapContainer) {
   }
 
   setSelecting(false); // pinta el botón (icono + texto)
-  selectButton.addEventListener("click", () => setSelecting(!selecting));
+  selectButton.addEventListener("click", () => {
+    if (selecting && anchor) clearSelection(); // arrastre a medias: se descarta
+    setSelecting(!selecting);
+  });
   // Con Ctrl pulsado el mapa selecciona zona sin pulsar el botón (al soltarlo, vuelve a arrastrar).
   let ctrlSelecting = false;
   document.addEventListener("keydown", (event) => {
@@ -580,16 +566,30 @@ if (mapContainer) {
 
   map.on("mousedown", (event: L.LeafletMouseEvent) => {
     if (!selecting) return;
+    map.closePopup(); // el menú de una selección anterior no debe quedar debajo del arrastre
     anchor = event.latlng;
     selection?.remove();
     selection = L.rectangle(L.latLngBounds(anchor, anchor), SELECTION_STYLE).addTo(map);
   });
-  map.on("mousemove", (event: L.LeafletMouseEvent) => {
-    if (selecting && anchor && selection) selection.setBounds(L.latLngBounds(anchor, event.latlng));
-  });
-  map.on("mouseup", (event: L.LeafletMouseEvent) => {
+  // El arrastre se sigue en `document`, no en el mapa: si el cursor pasa por un menú, un control
+  // o un tooltip, o se suelta fuera del mapa, el mapa no recibe el `mouseup` y la selección
+  // quedaba a medias (modo selección atascado, y el botón dejaba de responder).
+  document.addEventListener("mousemove", (event: MouseEvent) => {
     if (!selecting || !anchor || !selection) return;
-    const bounds = L.latLngBounds(anchor, event.latlng);
+    selection.setBounds(L.latLngBounds(anchor, map.mouseEventToLatLng(event)));
+  });
+  // Al soltar sobre una detección o un evento, el navegador lanza además un `click` que abría su
+  // popup y cerraba el menú de la zona (solo hay un popup a la vez). Ese clic se descarta.
+  let swallowClick = false;
+  map.getContainer().addEventListener("click", (event) => {
+    if (!swallowClick) return;
+    event.stopPropagation(); // en captura: Leaflet no llega a verlo
+  }, true);
+  document.addEventListener("mouseup", (event: MouseEvent) => {
+    if (!selecting || !anchor || !selection) return;
+    swallowClick = true;
+    window.setTimeout(() => (swallowClick = false), 100);
+    const bounds = L.latLngBounds(anchor, map.mouseEventToLatLng(event));
     setSelecting(false);
     if (bounds.getNorthEast().equals(bounds.getSouthWest())) {
       clearSelection(); // un clic sin arrastrar no es una zona

@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from _paths import ETLS_DIR
+
 from fire_etl.config import load_config
 from fire_etl.postgres_loader import apply_schema, describe_url
 from fire_etl.sigpac_loader import (

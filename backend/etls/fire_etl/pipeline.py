@@ -14,9 +14,8 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -108,10 +107,13 @@ def process_detections(
         raise NoDetectionsError("No hay detecciones válidas dentro del área de interés")
 
     located = geometries.detections
-    if config.land_cover.sigpac_dir:
+    land_cover_cfg = config.land_cover
+    database_url = config.database.url if land_cover_cfg.use_database else None
+    if database_url or land_cover_cfg.sigpac_dir:
         located, land_cover_summary = enrich(
             located,
-            Path(config.land_cover.sigpac_dir),
+            Path(land_cover_cfg.sigpac_dir) if land_cover_cfg.sigpac_dir else None,
+            database_url=database_url,
             sigpac_confidence=config.land_cover.sigpac_confidence,
             min_confidence=config.land_cover.min_confidence,
         )
@@ -119,7 +121,7 @@ def process_detections(
     else:
         LOGGER.warning(
             "Cobertura del suelo desactivada (land_cover.sigpac_dir sin definir): land_cover, "
-            "land_cover_confidence, sigpac_uso, is_agricultural e is_forest saldrán vacíos."
+            "land_cover_confidence, sigpac_use, is_agricultural e is_forest saldrán vacíos."
         )
 
     is_valid = located["is_valid"].astype(bool)

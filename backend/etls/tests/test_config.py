@@ -14,6 +14,7 @@ from fire_etl.config import (
     DatabaseConfig,
     DownloadConfig,
     InvalidConfigError,
+    LandCoverConfig,
     PipelineConfig,
     config_from_dict,
     load_config,
@@ -32,6 +33,7 @@ def test_default_yaml_matches_dataclass_defaults_except_spain_area():
         loaded,
         area_of_interest=AreaOfInterestConfig(),
         database=DatabaseConfig(),
+        land_cover=LandCoverConfig(),
         validation=no_zones,
     )
     assert loaded.download == DownloadConfig()
@@ -73,6 +75,18 @@ def test_default_yaml_defines_the_la_palma_eruption_exclusion_zone():
     assert not (min_lat <= 28.8 <= max_lat)
 
 
+def test_default_yaml_configures_conservative_frp_noise_thresholds():
+    thresholds = load_config(DEFAULT_YAML).validation.frp_thresholds_mw
+
+    assert thresholds["VIIRS"] == {
+        "min_day": 3.7,
+        "min_night": 0.7,
+        "limit_low": 35.0,
+        "limit_medium": 70.0,
+    }
+    assert thresholds["MODIS"]["min_day"] == 5.7
+
+
 def test_exclusion_zones_are_parsed_from_plain_dicts():
     config = config_from_dict(
         {
@@ -108,6 +122,7 @@ def test_partial_override_keeps_other_defaults():
         {"confidence": {"single_sensor_high_level": "very_high"}},
         {"area_of_interest": {"bbox": [0, 0, 1, 1], "polygon_wkt": "POINT (0 0)"}},
         {"events": {"reference_time": "2026-09-15T00:00:00"}},
+        {"validation": {"frp_thresholds_mw": {"VIIRS": {}}}},
     ],
 )
 def test_invalid_config_is_rejected(raw):

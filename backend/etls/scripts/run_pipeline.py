@@ -8,12 +8,67 @@ chatbot). Si lo ejecutas en la consola de Python de PyCharm, al terminar tienes 
 ``tables.detections``, ``tables.observations``, ``tables.events``, etc. como DataFrames.
 
     python scripts/run_pipeline.py
+
+Qué acaba en ``clean_data/``
+----------------------------
+Solo los eventos de incendio y las detecciones que pertenecen a algún evento (las observaciones
+aisladas de confianza baja y el ruido por FRP no llegan). Fechas en UTC
+(``YYYY-MM-DDTHH:MM:SSZ``) y coordenadas en EPSG:4326 (``lon, lat`` en GeoJSON). Ficheros:
+
+- ``fire_events.geojson``: un punto (centroide) por evento, para el mapa.
+- ``fire_event_areas.geojson``: envolvente (polígono) de cada evento. Propiedades: ``event_id``,
+  ``status``, ``frp_category``, ``footprint_area_km2``.
+- ``fire_detections.geojson``: las detecciones de los eventos (puntos).
+- ``fire_events.json``: igual que ``fire_events.geojson`` pero plano y con ``frp_series``, para
+  el chatbot.
+- ``metadata.json``: fecha de generación, recuentos, parámetros del algoritmo, fuentes y avisos.
+
+Columnas de los eventos (``fire_events.geojson`` / ``fire_events.json``), ordenados del más
+reciente al más antiguo:
+
+- ``event_id``: identificador del evento.
+- ``status``: ``active`` (sigue activo) o ``closed`` (cerrado).
+- ``first_detection`` / ``last_detection``: primera y última detección del evento (UTC).
+- ``duration_hours``: horas entre la primera y la última detección.
+- ``lat`` / ``lon``: centroide del evento (5 decimales).
+- ``n_detections``: número de detecciones (píxeles) del evento.
+- ``sensors``: sensores que lo han visto: ``MODIS``, ``VIIRS`` o ``MODIS,VIIRS``.
+- ``frp_max_mw``: FRP (potencia radiativa del fuego) máximo, en MW.
+- ``frp_category``: intensidad (low, medium, high) de la detección más intensa del evento.
+- ``biomass_max_kg_s``: tasa máxima de combustión de biomasa (FRP x coeficiente en kg/MJ), en
+  kg/s. Es una tasa, no una masa total.
+- ``biomass_burned_t``: biomasa quemada estimada, en toneladas.
+- ``n_passes``: pasadas de satélite que lo observaron.
+- ``max_pass_gap_hours``: mayor hueco, en horas, entre pasadas consecutivas.
+- ``confidence``: confianza fusionada de las observaciones (low, medium, high, very_high).
+- ``footprint_area_km2``: área de la envolvente (huella de píxeles más buffer), en km². NO es
+  superficie quemada.
+- ``land_cover``: cobertura del suelo dominante entre sus detecciones (SIGPAC normalizado:
+  crops, trees, shrub_and_scrub, grass, built, bare, water, other); vacío si no hay SIGPAC.
+- ``is_agricultural`` / ``is_forest``: ``true`` si ``land_cover`` es ``crops`` / ``trees``;
+  vacío si no hay cobertura.
+- ``summary``: frase en castellano que resume el evento (popups del mapa y chatbot).
+- ``frp_series`` (solo en ``fire_events.json``): serie temporal por observación, con
+  ``window_start``, ``n_detections``, ``frp_total``, ``frp_max`` y ``biomass_total_kg_s``.
+
+Columnas de las detecciones (``fire_detections.geojson``):
+
+- ``detection_id``: identificador de la detección; ``event_id``: evento al que pertenece.
+- ``acq_datetime``: instante de adquisición (UTC).
+- ``source`` / ``satellite``: producto (MODIS o VIIRS) y satélite que la detectó.
+- ``lat`` / ``lon``: posición del píxel (5 decimales).
+- ``frp_mw``: FRP de la detección, en MW; ``frp_category``: low, medium o high.
+- ``biomass_kg_s``: tasa de combustión de biomasa de la detección, en kg/s.
+- ``confidence``: confianza normalizada de la detección.
+- ``daynight``: ``D`` (día) o ``N`` (noche).
+- ``land_cover``: cobertura del suelo SIGPAC en ese punto (vacío si no hay SIGPAC).
 """
 
 import json
 import logging
 
 from _paths import ETLS_DIR, SAMPLE_DIR
+
 from fire_etl.config import load_config
 from fire_etl.firms_download import download_all
 from fire_etl.firms_nrt import download_nrt, nrt_files

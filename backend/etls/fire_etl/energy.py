@@ -20,7 +20,6 @@ comparar incendios, no como medida exacta.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from fire_etl.config import BiomassConfig
@@ -79,9 +78,7 @@ def event_energy(detections: pd.DataFrame, config: BiomassConfig) -> pd.DataFram
     right = (gap_next / 2).clip(upper=half).fillna(half)
     passes["fre_mj"] = passes["frp_pass"] * (left + right) * SECONDS_PER_HOUR
 
-    result = passes.groupby("event_id").agg(
-        n_passes=("time", "size"), fre_mj=("fre_mj", "sum")
-    )
+    result = passes.groupby("event_id").agg(n_passes=("time", "size"), fre_mj=("fre_mj", "sum"))
     result["max_pass_gap_hours"] = gap_next.groupby(passes["event_id"]).max().fillna(0.0)
     result["biomass_burned_kg"] = result["fre_mj"] * config.coefficient_kg_per_mj
 
