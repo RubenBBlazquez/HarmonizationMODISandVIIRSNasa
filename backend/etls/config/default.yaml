@@ -19,14 +19,15 @@ area_of_interest:
 validation:
   lat_range: [-90.0, 90.0]
   lon_range: [-180.0, 180.0]
-  scan_km_range: [0.1, 10.0]
-  track_km_range: [0.1, 10.0]
   frp_min: 0.0
   allowed_daynight: [D, N]
   # Marca como no válidas (is_valid=false, skip_reason="below_frp_threshold") las detecciones por
   # debajo del FRP mínimo por instrumento y día/noche. No se descartan: se conservan en
   # detections.parquet pero no entran en observaciones, eventos ni clean_data.
   apply_frp_thresholds: true
+  # Un foco en bosque (is_forest) se mantiene válido (categoría "low") aunque su FRP esté por
+  # debajo del mínimo, para que pueda alertar; en agricultura se sigue descartando. Necesita SIGPAC.
+  keep_forest_below_frp: true
   # MW. Mínimos conservadores cercanos a la sensibilidad publicada de los píxeles más pequeños,
   # para no ocultar incendios pequeños ya detectados por FIRMS. Ajustar con históricos locales.
   frp_thresholds_mw:
@@ -86,6 +87,9 @@ geometry:
   metric_crs: "EPSG:25830"
   storage_crs: "EPSG:4326"
   footprint_buffer_m: 400.0
+  # Lado nominal del píxel (km): MODIS 1 km, VIIRS 375 m. El área de cada detección es su cuadrado
+  # (MODIS 1 km², VIIRS 0,140625 km²).
+  pixel_size_km: {MODIS: 1.0, VIIRS: 0.375}
 
 windows:
   # day_utc | hours_12 | date_daynight

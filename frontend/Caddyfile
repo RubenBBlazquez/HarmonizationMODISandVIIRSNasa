@@ -1,0 +1,22 @@
+# Servidor de producción del frontend (ver Dockerfile).
+#   PORT    -> puerto de escucha (Railway lo inyecta).
+#   API_URL -> destino de /api/*, p. ej. http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}.
+{
+	admin off
+	auto_https off
+}
+
+:{$PORT:8080} {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy {$API_URL:http://localhost:8000}
+	}
+
+	handle {
+		root * /srv
+		file_server
+	}
+
+	header /assets/* Cache-Control "public, max-age=31536000, immutable"
+}

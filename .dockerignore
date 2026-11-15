@@ -1,6 +1,11 @@
 .git
 .idea
 .venv
+**/.venv
+**/node_modules
+frontend/dist
+backend/etls/data
+backend/etls/clean_data
 **/__pycache__
 **/.pytest_cache
 **/output

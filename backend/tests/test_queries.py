@@ -60,8 +60,8 @@ def detection_row(index: int = 0) -> dict:
         "biomass_kg_s": 4.5432,
         "confidence_norm": "nominal",
         "land_cover": None,
-        "scan": 0.4,
-        "track": 0.5,
+        "area_width_km": 0.4,
+        "area_height_km": 0.5,
         "geometry": POINT,
     }
 
@@ -109,14 +109,14 @@ def test_detections_query_combines_all_filters_in_a_stable_order():
     assert query.sql.count("%s") == len(query.params) + 1  # + LIMIT
 
 
-def test_pixel_geometry_builds_scan_by_track_rectangle_without_buffer():
+def test_pixel_geometry_builds_the_width_by_height_rectangle_without_buffer():
     point = detections_query(Filters())
     pixel = detections_query(Filters(bbox=SPAIN_BBOX, source="MODIS"), geometry="pixel")
 
     assert "LATERAL" not in point.sql and "ST_AsGeoJSON(d.geom_point, 5)" in point.sql
     assert "CROSS JOIN LATERAL (SELECT ST_Transform(d.geom_point, 25830) AS geom) p" in pixel.sql
-    assert "ST_X(p.geom) - d.scan * 500.0" in pixel.sql
-    assert "ST_Y(p.geom) + d.track * 500.0" in pixel.sql
+    assert "ST_X(p.geom) - d.area_width_km * 500.0" in pixel.sql
+    assert "ST_Y(p.geom) + d.area_height_km * 500.0" in pixel.sql
     assert "25830), 4326)" in pixel.sql  # envolvente en UTM y devuelta en EPSG:4326
     assert "LATERAL" not in pixel.count_sql  # el recuento no necesita la geometría
     assert pixel.params == (*SPAIN_BBOX, "MODIS")
@@ -188,8 +188,9 @@ def test_detection_feature_formats_values_for_the_map():
     assert feature["properties"]["frp_mw"] == 12.35
     assert feature["properties"]["biomass_kg_s"] == 4.543
     assert feature["properties"]["land_cover"] is None
-    assert feature["properties"]["scan_km"] == 0.4 and feature["properties"]["track_km"] == 0.5
-    assert feature["properties"]["pixel_area_km2"] == 0.2
+    assert feature["properties"]["area_width_km"] == 0.4
+    assert feature["properties"]["area_height_km"] == 0.5
+    assert "scan_km" not in feature["properties"] and "track_km" not in feature["properties"]
 
 
 def test_event_feature_includes_passes_and_estimated_biomass():
@@ -440,7 +441,7 @@ def test_event_detections_sql_draws_pixels_of_one_event():
     sql = queries.event_detections_sql()
 
     assert "WHERE ed.event_id = %s" in sql and sql.endswith("LIMIT %s")
-    assert "ST_X(p.geom) - d.scan * 500.0" in sql
+    assert "ST_X(p.geom) - d.area_width_km * 500.0" in sql
     assert sql.count("%s") == 2
 
 
@@ -494,3 +495,82 @@ def test_fetch_activity_formats_recent_events_and_limits_the_query():
     assert data["items"][0]["lat"] == 42.12346
     assert "ORDER BY last_detection DESC" in connection.calls[0][0]
     assert connection.calls[0][1] == (3,)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    [
+        (date(2025, 8, 12), date(2025, 8, 18), (812, 818)),
+        (date(2025, 12, 25), date(2026, 1, 5), (1225, 105)),  # cruza el fin de año
+        (date(2024, 3, 1), date(2025, 8, 1), (101, 1231)),  # un año o más: todo el año
+    ],
+)
+def test_day_window_covers_the_same_dates_of_every_year(start, end, expected):
+    assert queries.day_window(start, end) == expected
+
+
+def test_day_window_rejects_reversed_ranges():
+    with pytest.raises(queries.InvalidPeriodError):
+        queries.day_window(date(2025, 9, 1), date(2025, 8, 1))
+
+
+def test_day_window_filter_replaces_the_date_range_in_detections_and_events():
+    filters = Filters(
+        bbox=SPAIN_BBOX, start=date(2025, 8, 12), end=date(2025, 8, 18), day_window=(812, 818)
+    )
+
+    detections = detections_query(filters)
+    events = events_query(filters)
+    inside = events_query(filters, match="inside")
+
+    assert "BETWEEN %s AND %s" in detections.sql
+    assert "d.acq_datetime >= %s" not in detections.sql
+    assert detections.params[-2:] == (812, 818)
+    assert events.sql.count("BETWEEN %s AND %s") == 2  # día del inicio o del final del evento
+    assert "e.last_detection >= %s" not in events.sql
+    assert "BETWEEN %s AND %s" in inside.sql
+    for query in (detections, events, inside):
+        assert query.sql.count("%s") == len(query.params) + 1  # + LIMIT
+
+
+def test_day_window_crossing_new_year_uses_or():
+    query = detections_query(Filters(day_window=(1225, 105)))
+
+    assert ">= %s OR" in query.sql and "<= %s)" in query.sql
+    assert query.params[-2:] == (1225, 105)
+
+
+def test_yearly_query_groups_valid_detections_by_year_for_the_same_dates():
+    filters = Filters(bbox=SPAIN_BBOX, source="VIIRS", day_window=(812, 818))
+
+    query = queries.yearly_query(filters)
+
+    assert "GROUP BY year ORDER BY year DESC" in query.sql and "d.is_valid" in query.sql
+    assert query.params == (*SPAIN_BBOX, 812, 818, "VIIRS")
+    assert query.sql.count("%s") == len(query.params)
+
+
+def test_yearly_query_needs_a_day_window():
+    with pytest.raises(ValueError):
+        queries.yearly_query(Filters(bbox=SPAIN_BBOX))
+
+
+def test_fetch_yearly_fills_years_without_data_between_the_first_and_the_last():
+    rows = [
+        {"year": 2024, "events": 3, "detections": 40, "frp_max": 55.123},
+        {"year": 2022, "events": 1, "detections": 5, "frp_max": None},
+    ]
+    connection = FakeConnection(rows)
+
+    result = queries.fetch_yearly(connection, Filters(day_window=(812, 818)))
+
+    assert result["window"] == [812, 818]
+    assert [year["year"] for year in result["years"]] == [2024, 2023, 2022]
+    assert result["years"][0] == {"year": 2024, "events": 3, "detections": 40, "frp_max_mw": 55.12}
+    assert result["years"][1] == {"year": 2023, "events": 0, "detections": 0, "frp_max_mw": None}
+
+
+def test_fetch_yearly_without_data_returns_no_years():
+    connection = FakeConnection([])
+
+    assert queries.fetch_yearly(connection, Filters(day_window=(812, 818)))["years"] == []

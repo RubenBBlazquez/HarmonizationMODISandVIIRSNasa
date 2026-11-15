@@ -26,7 +26,7 @@ from fire_etl.config import PipelineConfig, load_config
 from fire_etl.events import PreviousState, build_events
 from fire_etl.fusion import assign_time_windows, build_observations
 from fire_etl.geometry import build_detection_geometries
-from fire_etl.ingest import IngestResult, ingest_frames, read_firms_csv
+from fire_etl.ingest import IngestResult, ingest_frames, keep_forest_detections, read_firms_csv
 from fire_etl.outputs import PipelineTables, read_previous_state, write_tables
 from fire_etl.postgres_loader import load_to_postgres
 from fire_etl.sigpac_land_cover import enrich, log_summary
@@ -123,6 +123,10 @@ def process_detections(
             "Cobertura del suelo desactivada (land_cover.sigpac_dir sin definir): land_cover, "
             "land_cover_confidence, sigpac_use, is_agricultural e is_forest saldrán vacíos."
         )
+
+    located, forest_kept = keep_forest_detections(located, config.validation)
+    if forest_kept:
+        LOGGER.info("Detecciones en bosque con FRP bajo mantenidas como válidas: %s", forest_kept)
 
     is_valid = located["is_valid"].astype(bool)
     if not is_valid.any():

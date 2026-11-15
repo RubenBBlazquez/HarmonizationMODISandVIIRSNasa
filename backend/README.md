@@ -31,17 +31,18 @@ Todos son de solo lectura y devuelven GeoJSON (`application/geo+json`).
 | `GET /api/summary` | detecciones válidas / marcadas, eventos y rango de fechas |
 | `GET /api/detections` | detecciones **válidas** (`is_valid = true`): punto (`geometry=point`) o área del píxel (`geometry=pixel`) |
 | `GET /api/events` | eventos: centroide (`geometry=point`) o envolvente (`geometry=area`); con `bbox`, `match=intersects` (por defecto) o `match=inside` (ver abajo) |
-| `GET /api/history` | incendios "similares" de una zona en años anteriores (ver abajo) |
+| `GET /api/history` | incendios de una zona en años anteriores (ver abajo) |
 | `GET /api/events/{event_id}` | un incendio: su envolvente y sus detecciones como píxeles (`limit`, 2000 por defecto); 404 si no existe |
 
 Filtros comunes: `bbox=minLon,minLat,maxLon,maxLat`, `start=AAAA-MM-DD`, `end=AAAA-MM-DD`
 (ambas incluidas), `source=MODIS|VIIRS` y `limit` (por defecto 5000, máximo 50000).
 `/api/detections` admite además `frp_category=low|medium|high`.
 
-`geometry=pixel` devuelve el rectángulo `scan` × `track` km centrado en el punto (sin el buffer de
+`geometry=pixel` devuelve el rectángulo `area_width_km` × `area_height_km` centrado en el punto (sin el buffer de
 400 m que el pipeline usa para agrupar), construido en el CRS métrico del pipeline (EPSG:25830) y
-devuelto en EPSG:4326. Es una aproximación alineada a los ejes: no refleja la inclinación de la
-órbita ni el solape *bow-tie*. Cada detección incluye `scan_km`, `track_km` y `pixel_area_km2`.
+devuelto en EPSG:4326. Es una aproximación alineada a los ejes: no refleja la inclinación de
+la órbita ni el solape *bow-tie*. Cada detección incluye `area_width_km` y `area_height_km`
+(siempre en km; hoy MODIS 1 × 1 y VIIRS 0,375 × 0,375).
 El mapa usa píxeles desde el zoom 10 y puntos por debajo (a menos zoom el píxel mide <1 px).
 
 Cada incendio incluye `n_passes` (veces que un satélite lo vio), `max_pass_gap_hours` (mayor hueco
@@ -67,9 +68,9 @@ curl "http://localhost:8000/api/detections?bbox=-6.6,41.8,-5.9,42.15&start=2022-
   `geometry=point` el punto es el **centro de esas detecciones**, así que siempre queda dentro del
   recuadro. `n_detections` y `frp_max_mw` siguen siendo los del incendio completo.
 
-### Incendios similares en años anteriores (`/api/history`)
+### Incendios de años anteriores (`/api/history`)
 
-Criterio de "similar": **misma zona** (`bbox`, obligatorio) y **mismas fechas del año**
+Criterio: **misma zona** (`bbox`, obligatorio) y **mismas fechas del año**
 (`start`–`end`, obligatorias, como mucho un año) en cada uno de los `years` años anteriores
 (10 por defecto, hasta 30). Un incendio cuenta en un periodo si tiene detecciones válidas dentro
 de la zona en esas fechas (`match=inside`).
@@ -92,12 +93,46 @@ fechas, detecciones, FRP máximo, duración, huella, sensores y confianza. Los m
 hacerse visibles; se muestran como mucho los 100 mayores.
 
 En el mapa: botón **Seleccionar zona** → arrastrar un recuadro → menú con *Incendios en esta
-zona*, *Incendios similares en los últimos 10 años*, *Acercar a la zona* y *Quitar selección*.
+zona*, *Incendios de los últimos 10 años*, *Acercar a la zona* y *Quitar selección*.
 
 ## Configuración
 
 - `DATABASE_URL` (la define `docker-compose.yml`; por defecto la base local de desarrollo).
 - `CORS_ORIGINS` (por defecto `http://localhost:5173,http://127.0.0.1:5173`).
+- `PORT` (por defecto `8000`; Railway la inyecta).
+
+## Despliegue en Railway
+
+Solo se despliegan la API, el frontend y PostGIS; el ETL se ejecuta en local. Un proyecto de
+Railway con tres servicios conectados por la red privada:
+
+| Servicio   | Origen                                         | Root Directory | Config file              |
+| ---------- | ---------------------------------------------- | -------------- | ------------------------ |
+| `postgis`  | Plantilla **PostGIS** de Railway (con volumen)  | —              | —                        |
+| `api`      | Este repo, `backend/Dockerfile`                | `/`            | `/backend/railway.json`  |
+| `frontend` | Este repo, `frontend/Dockerfile` (Vite + Caddy) | `/frontend`    | `/frontend/railway.json` |
+
+El Postgres por defecto de Railway no trae PostGIS: usa la plantilla PostGIS (o un servicio con
+la imagen `postgis/postgis:16-3.4` y un volumen en `/var/lib/postgresql/data`).
+
+Variables (usa referencias de Railway, no copies secretos):
+
+- `api`: `DATABASE_URL=${{postgis.DATABASE_URL}}` y `PORT=8000`. Sin dominio público.
+- `frontend`: `API_URL=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`. Genera un dominio
+  público en *Settings → Networking*. Caddy sirve el build de Vite y reenvía `/api/*` a la API
+  por la red privada (mismo papel que el proxy de Vite en local), así que no hace falta CORS.
+
+El esquema y los datos se copian desde el PostGIS local de docker-compose (sin los datos de
+SIGPAC, que solo usa el ETL). `TARGET_DATABASE_URL` es la variable `DATABASE_PUBLIC_URL` del
+servicio `postgis`:
+
+```bash
+TARGET_DATABASE_URL='postgresql://...proxy.rlwy.net:<puerto>/railway' \
+  sh backend/databases/sync_to_railway.sh
+```
+
+Cada ejecución sustituye las tablas de `fire` en Railway. La API cachea `/api/yearly` una hora:
+reinicia el servicio `api` tras una carga si quieres verla al momento.
 
 ## Tests
 

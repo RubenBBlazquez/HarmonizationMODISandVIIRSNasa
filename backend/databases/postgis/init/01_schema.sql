@@ -17,8 +17,8 @@ CREATE TABLE IF NOT EXISTS fire.detections (
     acq_date            date            NOT NULL,       -- fecha UTC
     lat                 double precision NOT NULL,
     lon                 double precision NOT NULL,
-    scan                double precision NOT NULL,      -- km
-    track               double precision NOT NULL,      -- km
+    area_width_km       double precision NOT NULL,      -- ancho del área de la detección, km
+    area_height_km      double precision NOT NULL,      -- alto del área de la detección, km
     frp                 double precision NOT NULL,      -- MW
     biomass_kg_s        double precision NOT NULL,      -- frp * coeficiente (kg/MJ): tasa en kg/s
     frp_class           smallint        CHECK (frp_class IN (0, 1, 2, 3)),  -- 0 discarded, 1 low, 2 medium, 3 high

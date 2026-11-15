@@ -31,7 +31,7 @@ EVENT_MATCHES = ("intersects", "inside")
 DETECTION_GEOMETRIES = ("point", "pixel")
 # CRS métrico en el que el pipeline construye el píxel (geometry.metric_crs de la configuración).
 PIXEL_SRID = 25830
-HALF_KM_IN_M = 500.0  # scan y track están en km: la mitad del lado, en metros, es km * 500
+HALF_KM_IN_M = 500.0  # ancho y alto están en km: la mitad, en metros, es km * 500
 
 
 class InvalidBBoxError(ValueError):
@@ -59,6 +59,10 @@ class Filters:
         ``low``, ``medium`` o ``high`` (solo detecciones).
     limit : int
         Máximo de elementos devueltos.
+    day_window : tuple[int, int] | None
+        Ventana de días del año ``(inicio, fin)`` con formato ``mes*100 + día`` (``812`` = 12 ago).
+        Si se informa, se devuelven las **mismas fechas de todos los años** y se ignoran los años
+        de ``start`` y ``end`` (ver ``day_window``). Si ``inicio > fin`` cruza el fin de año.
     """
 
     bbox: tuple[float, float, float, float] | None = None
@@ -67,6 +71,7 @@ class Filters:
     source: str | None = None
     frp_category: str | None = None
     limit: int = DEFAULT_LIMIT
+    day_window: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +109,46 @@ def _day_start(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=timezone.utc)
 
 
+def day_window(start: date, end: date) -> tuple[int, int]:
+    """
+    Ventana de días del año (``mes*100 + día``) que cubre el rango ``start``-``end``.
+
+    Sirve para pedir las mismas fechas en todos los años: 12-18 ago → ``(812, 818)``; 25 dic →
+    5 ene cruza el fin de año → ``(1225, 105)``. Un rango de un año o más da el año entero.
+    """
+    if start > end:
+        raise InvalidPeriodError("start no puede ser posterior a end")
+
+    if (end - start).days >= 365:
+        return 101, 1231
+
+    return start.month * 100 + start.day, end.month * 100 + end.day
+
+
+def _window_clause(column: str, window: tuple[int, int]) -> tuple[str, list[int]]:
+    """Condición "el día del año (UTC) de ``column`` cae en la ventana" y sus parámetros."""
+    key = (
+        f"(EXTRACT(MONTH FROM {column} AT TIME ZONE 'UTC')::int * 100 "
+        f"+ EXTRACT(DAY FROM {column} AT TIME ZONE 'UTC')::int)"
+    )
+    first, last = window
+    if first <= last:
+        return f"{key} BETWEEN %s AND %s", [first, last]
+
+    return f"({key} >= %s OR {key} <= %s)", [first, last]
+
+
+def _window_where(first: str, last: str, window: tuple[int, int]) -> tuple[str, list[int]]:
+    """Ventana para una fecha (``first == last``) o para el inicio o el final de un evento."""
+    clause, params = _window_clause(first, window)
+    if first == last:
+        return clause, params
+
+    other, other_params = _window_clause(last, window)
+
+    return f"({clause} OR {other})", [*params, *other_params]
+
+
 def _where(
     filters: Filters, base: list[str], geom: str, first: str, last: str, source_sql: str
 ) -> tuple[str, list[Any]]:
@@ -112,13 +157,18 @@ def _where(
         clauses.append(f"{geom} && ST_MakeEnvelope(%s, %s, %s, %s, {SRID})")
         params.extend(filters.bbox)
 
-    if filters.start is not None:
-        clauses.append(f"{last} >= %s")
-        params.append(_day_start(filters.start))
+    if filters.day_window is not None:
+        clause, window_params = _window_where(first, last, filters.day_window)
+        clauses.append(clause)
+        params.extend(window_params)
+    else:
+        if filters.start is not None:
+            clauses.append(f"{last} >= %s")
+            params.append(_day_start(filters.start))
 
-    if filters.end is not None:
-        clauses.append(f"{first} < %s")
-        params.append(_day_start(filters.end) + timedelta(days=1))
+        if filters.end is not None:
+            clauses.append(f"{first} < %s")
+            params.append(_day_start(filters.end) + timedelta(days=1))
 
     if filters.source is not None:
         clauses.append(source_sql)
@@ -129,15 +179,17 @@ def _where(
 
 def pixel_geometry_sql() -> str:
     """
-    Polígono del píxel de la detección: rectángulo ``scan`` (X) × ``track`` (Y) km centrado en el
-    punto, construido en el CRS métrico del pipeline y devuelto en EPSG:4326. No incluye el
-    buffer de solape de ``geom_footprint``; es el tamaño real del píxel (aproximación alineada a
-    los ejes, sin la inclinación de la órbita).
+    Polígono del área de la detección: rectángulo ``area_width_km`` (X) × ``area_height_km`` (Y)
+    centrado en el punto, construido en el CRS métrico del pipeline y devuelto en EPSG:4326. No
+    incluye el buffer de solape de ``geom_footprint`` (aproximación alineada a los ejes, sin la
+    inclinación de la órbita).
     """
+    half_width = f"d.area_width_km * {HALF_KM_IN_M}"
+    half_height = f"d.area_height_km * {HALF_KM_IN_M}"
     return (
         "ST_Transform(ST_MakeEnvelope("
-        f"ST_X(p.geom) - d.scan * {HALF_KM_IN_M}, ST_Y(p.geom) - d.track * {HALF_KM_IN_M}, "
-        f"ST_X(p.geom) + d.scan * {HALF_KM_IN_M}, ST_Y(p.geom) + d.track * {HALF_KM_IN_M}, "
+        f"ST_X(p.geom) - {half_width}, ST_Y(p.geom) - {half_height}, "
+        f"ST_X(p.geom) + {half_width}, ST_Y(p.geom) + {half_height}, "
         f"{PIXEL_SRID}), {SRID})"
     )
 
@@ -146,7 +198,7 @@ def detections_query(filters: Filters, geometry: str = "point") -> Query:
     """
     Detecciones válidas (``is_valid``), de la más reciente a la más antigua.
 
-    ``geometry="point"`` devuelve el punto; ``"pixel"``, el área ``scan`` × ``track``.
+    ``geometry="point"`` devuelve el punto; ``"pixel"``, el área (``area_width_km`` × ``area_height_km``).
     """
     if geometry not in DETECTION_GEOMETRIES:
         raise ValueError(f"geometry debe ser uno de {DETECTION_GEOMETRIES}")
@@ -176,7 +228,7 @@ def detections_query(filters: Filters, geometry: str = "point") -> Query:
 
     sql = (
         "SELECT d.detection_id, d.source, d.satellite, d.acq_datetime, d.daynight, d.frp, "
-        "d.frp_category, d.biomass_kg_s, d.confidence_norm, d.land_cover, d.scan, d.track, "
+        "d.frp_category, d.biomass_kg_s, d.confidence_norm, d.land_cover, d.area_width_km, d.area_height_km, "
         f"ed.event_id, ST_AsGeoJSON({geom}, {COORD_DECIMALS})::json AS geometry "
         f"{rows_from} WHERE {where} ORDER BY d.acq_datetime DESC, d.detection_id LIMIT %s"
     )
@@ -194,13 +246,18 @@ def _inside_lateral(filters: Filters) -> tuple[str, list[Any]]:
         f"d.geom_point && ST_MakeEnvelope(%s, %s, %s, %s, {SRID})",
     ]
     params: list[Any] = list(filters.bbox)
-    if filters.start is not None:
-        where.append("d.acq_datetime >= %s")
-        params.append(_day_start(filters.start))
+    if filters.day_window is not None:
+        clause, window_params = _window_where("d.acq_datetime", "d.acq_datetime", filters.day_window)
+        where.append(clause)
+        params.extend(window_params)
+    else:
+        if filters.start is not None:
+            where.append("d.acq_datetime >= %s")
+            params.append(_day_start(filters.start))
 
-    if filters.end is not None:
-        where.append("d.acq_datetime < %s")
-        params.append(_day_start(filters.end) + timedelta(days=1))
+        if filters.end is not None:
+            where.append("d.acq_datetime < %s")
+            params.append(_day_start(filters.end) + timedelta(days=1))
 
     lateral = (
         "CROSS JOIN LATERAL (SELECT count(*) AS zone_detections, max(d.frp) AS zone_frp_max, "
@@ -296,9 +353,8 @@ def detection_feature(row: dict[str, Any]) -> dict[str, Any]:
         "biomass_kg_s": _round(row["biomass_kg_s"], 3),
         "confidence": row["confidence_norm"],
         "land_cover": row["land_cover"],
-        "scan_km": _round(row["scan"], 3),
-        "track_km": _round(row["track"], 3),
-        "pixel_area_km2": _round(row["scan"] * row["track"], 3),
+        "area_width_km": _round(row["area_width_km"], 3),
+        "area_height_km": _round(row["area_height_km"], 3),
     }
 
     return {"type": "Feature", "geometry": row["geometry"], "properties": properties}
@@ -410,7 +466,7 @@ def fetch_activity(connection: _Connection, limit: int = DEFAULT_ACTIVITY_LIMIT)
     }
 
 
-# --- Histórico de una zona: incendios "similares" de años anteriores ---------------------------
+# --- Histórico de una zona: incendios de años anteriores ---------------------------
 # Criterio: misma zona (recuadro) y mismas fechas del año (el rango elegido desplazado 1, 2…
 # años atrás). El periodo elegido se incluye como referencia para comparar.
 DEFAULT_HISTORY_YEARS = 10
@@ -602,6 +658,63 @@ def fetch_history(
     }
 
 
+# --- Resumen por año de las mismas fechas de un rango (botón "Comparar con todos los años") -----------
+def yearly_query(filters: Filters) -> Query:
+    """
+    Detecciones válidas, incendios y FRP máximo por año, solo de las fechas de ``filters.day_window``.
+
+    Necesita ``day_window``; ``bbox`` y ``source`` son opcionales. No usa ``limit``.
+    """
+    if filters.day_window is None:
+        raise ValueError("yearly_query necesita day_window")
+
+    where, params = _where(
+        filters,
+        ["d.is_valid"],
+        "d.geom_point",
+        "d.acq_datetime",
+        "d.acq_datetime",
+        "d.source = %s",
+    )
+    sql = (
+        "SELECT EXTRACT(YEAR FROM d.acq_datetime AT TIME ZONE 'UTC')::int AS year, "
+        "count(*) AS detections, count(DISTINCT ed.event_id) AS events, max(d.frp) AS frp_max "
+        "FROM fire.detections d "
+        "LEFT JOIN fire.event_detections ed ON ed.detection_id = d.detection_id "
+        f"WHERE {where} GROUP BY year ORDER BY year DESC"
+    )
+
+    return Query(sql, "", tuple(params), 0)
+
+
+def fetch_yearly(connection: _Connection, filters: Filters) -> dict[str, Any]:
+    """
+    Resumen por año de las mismas fechas del rango.
+
+    Returns
+    -------
+    dict[str, Any]
+        ``window`` (``[inicio, fin]`` como mes*100 + día) y ``years`` (del más reciente al más antiguo, con ceros en los años
+        intermedios sin datos): ``year``, ``events``, ``detections`` y ``frp_max_mw``.
+    """
+    query = yearly_query(filters)
+    rows = {row["year"]: row for row in connection.execute(query.sql, query.params).fetchall()}
+    years = []
+    if rows:
+        for year in range(max(rows), min(rows) - 1, -1):
+            row = rows.get(year, {})
+            years.append(
+                {
+                    "year": year,
+                    "events": int(row.get("events") or 0),
+                    "detections": int(row.get("detections") or 0),
+                    "frp_max_mw": _round(row.get("frp_max"), 2),
+                }
+            )
+
+    return {"window": list(filters.day_window or ()), "years": years}
+
+
 # --- Detalle de un incendio: su envolvente y los píxeles de sus detecciones --------------------
 DEFAULT_EVENT_DETECTIONS = 2000
 
@@ -618,7 +731,7 @@ def event_detections_sql() -> str:
     """Detecciones de un evento con la geometría de su píxel, de la más antigua a la más nueva."""
     return (
         "SELECT d.detection_id, d.source, d.satellite, d.acq_datetime, d.daynight, d.frp, "
-        "d.frp_category, d.biomass_kg_s, d.confidence_norm, d.land_cover, d.scan, d.track, "
+        "d.frp_category, d.biomass_kg_s, d.confidence_norm, d.land_cover, d.area_width_km, d.area_height_km, "
         f"ed.event_id, ST_AsGeoJSON({pixel_geometry_sql()}, {COORD_DECIMALS})::json AS geometry "
         "FROM fire.event_detections ed "
         "JOIN fire.detections d ON d.detection_id = ed.detection_id "
@@ -631,7 +744,7 @@ def fetch_event_detail(
     connection: _Connection, event_id: str, limit: int = DEFAULT_EVENT_DETECTIONS
 ) -> dict[str, Any] | None:
     """
-    Evento (con su envolvente) y sus detecciones como píxeles ``scan`` × ``track``.
+    Evento (con su envolvente) y sus detecciones como rectángulos ``area_width_km`` × ``area_height_km``.
 
     Returns
     -------

@@ -6,10 +6,10 @@ UTM); nunca en grados. Las geometrías se almacenan después en EPSG:4326 (ver
 :mod:`fire_etl.outputs`).
 
 Limitación conocida del footprint: se aproxima como un rectángulo alineado a los ejes del CRS
-métrico, de ``scan`` km en X (dirección de barrido, aproximadamente E-O en órbitas polares) por
-``track`` km en Y (dirección de la órbita, aproximadamente N-S), centrado en el punto. No
-considera la inclinación real de la órbita, el solape *bow-tie* ni la función de dispersión del
-píxel; el buffer configurable absorbe parte de ese error y del de geolocalización.
+métrico, de ``area_width_km`` en X por ``area_height_km`` en Y (km, genéricos: no dependen del
+sensor) y centrado en el punto. No considera la inclinación real de la órbita, el solape
+*bow-tie* ni la función de dispersión del píxel; el buffer configurable absorbe parte de ese
+error y del de geolocalización.
 """
 
 from __future__ import annotations
@@ -137,19 +137,20 @@ def resolve_metric_crs(spec: str, reference: shapely.Geometry | None) -> CRS:
 
 
 def build_footprints(
-    points: gpd.GeoSeries, scan_km: pd.Series, track_km: pd.Series, buffer_m: float
+    points: gpd.GeoSeries, width_km: pd.Series, height_km: pd.Series, buffer_m: float
 ) -> gpd.GeoSeries:
     """
-    Construye el footprint de cada detección: rectángulo ``scan`` × ``track`` + buffer.
+    Construye el footprint de cada detección: rectángulo ``area_width_km`` × ``area_height_km``
+    más el buffer.
 
     Parameters
     ----------
     points : gpd.GeoSeries
         Puntos en un CRS métrico.
-    scan_km : pd.Series
-        Tamaño del píxel en la dirección de barrido (km), aplicado en X.
-    track_km : pd.Series
-        Tamaño del píxel en la dirección de la órbita (km), aplicado en Y.
+    width_km : pd.Series
+        Ancho del área en km, aplicado en X.
+    height_km : pd.Series
+        Alto del área en km, aplicado en Y.
     buffer_m : float
         Buffer en metros para absorber el error de posición.
 
@@ -160,8 +161,8 @@ def build_footprints(
     """
     x = points.x.to_numpy()
     y = points.y.to_numpy()
-    half_width = scan_km.to_numpy(dtype=float) * METERS_PER_KM / 2.0
-    half_height = track_km.to_numpy(dtype=float) * METERS_PER_KM / 2.0
+    half_width = width_km.to_numpy(dtype=float) * METERS_PER_KM / 2.0
+    half_height = height_km.to_numpy(dtype=float) * METERS_PER_KM / 2.0
 
     boxes = shapely.box(x - half_width, y - half_height, x + half_width, y + half_height)
     if buffer_m > 0:
@@ -179,7 +180,7 @@ def build_detection_geometries(
     Parameters
     ----------
     detections : pd.DataFrame
-        Detecciones en el esquema común (``lat``, ``lon``, ``scan``, ``track``...).
+        Detecciones en el esquema común (``lat``, ``lon``, ``area_width_km``...).
     geometry : GeometryConfig
         CRS y buffer.
     aoi : AreaOfInterestConfig
@@ -210,7 +211,7 @@ def build_detection_geometries(
     kept = detections[inside].copy()
     metric_points = points[inside].to_crs(metric_crs)
     footprints = build_footprints(
-        metric_points, kept["scan"], kept["track"], geometry.footprint_buffer_m
+        metric_points, kept["area_width_km"], kept["area_height_km"], geometry.footprint_buffer_m
     )
 
     kept["geom_footprint"] = footprints

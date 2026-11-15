@@ -15,7 +15,7 @@ from fire_etl.geometry import (
 from tests.conftest import BASE_LAT, BASE_LON, ingest_rows, modis_row, viirs_row
 
 
-def test_footprint_is_scan_by_track_plus_buffer(config):
+def test_footprint_is_the_width_by_height_area_plus_buffer(config):
     detections = ingest_rows(config, modis=[modis_row("2026-09-15 10:00", scan=2.0, track=1.5)])
 
     result = build_detection_geometries(
@@ -24,9 +24,12 @@ def test_footprint_is_scan_by_track_plus_buffer(config):
     min_x, min_y, max_x, max_y = result.detections.geometry.iloc[0].bounds
 
     assert result.metric_crs.to_epsg() == 25830
-    assert max_x - min_x == pytest.approx(2000 + 2 * 400, abs=1e-6)
-    assert max_y - min_y == pytest.approx(1500 + 2 * 400, abs=1e-6)
-    assert result.detections["footprint_area_m2"].iloc[0] == pytest.approx(2800 * 2300)
+    side = 1000.0  # MODIS: 1 km x 1 km nominal, sin importar el scan/track del fichero
+    assert result.detections["area_width_km"].iloc[0] == pytest.approx(1.0)
+    assert result.detections["area_height_km"].iloc[0] == pytest.approx(1.0)
+    assert max_x - min_x == pytest.approx(side + 2 * 400, abs=1e-6)
+    assert max_y - min_y == pytest.approx(side + 2 * 400, abs=1e-6)
+    assert result.detections["footprint_area_m2"].iloc[0] == pytest.approx((side + 800) ** 2)
 
 
 def test_geometry_keeps_point_and_footprint_columns(config):
@@ -64,3 +67,16 @@ def test_auto_metric_crs_uses_utm_zone_of_reference():
 def test_geographic_crs_is_rejected_for_calculations():
     with pytest.raises(MetricCrsError):
         resolve_metric_crs("EPSG:4326", None)
+
+
+def test_area_is_nominal_per_sensor_and_ignores_scan_and_track(config):
+    detections = ingest_rows(
+        config,
+        modis=[modis_row("2026-09-15 10:00", scan=3.0, track=3.0)],
+        viirs=[viirs_row("2026-09-15 10:00", north_m=5000, scan=0.7, track=0.7)],
+    ).detections
+
+    by_source = detections.set_index("source")
+
+    assert by_source.loc["MODIS", ["area_width_km", "area_height_km"]].tolist() == [1.0, 1.0]
+    assert by_source.loc["VIIRS", ["area_width_km", "area_height_km"]].tolist() == [0.375, 0.375]
