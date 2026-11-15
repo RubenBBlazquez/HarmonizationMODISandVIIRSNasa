@@ -48,6 +48,13 @@ const CONFIDENCE_LABELS: Record<string, string> = {
   nominal: "nominal",
 };
 
+export const CONFIDENCE_COLORS: Record<string, string> = {
+  low: "#e0b43c",
+  medium: "#e8833a",
+  high: "#c0392b",
+  very_high: "#8e1f2f",
+};
+
 export type Properties = Record<string, string | number | null>;
 export type FireFeature = GeoJSON.Feature<GeoJSON.Geometry, Properties>;
 
