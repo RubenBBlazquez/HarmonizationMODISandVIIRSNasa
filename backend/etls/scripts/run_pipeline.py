@@ -68,6 +68,7 @@ import json
 import logging
 
 from _paths import ETLS_DIR, SAMPLE_DIR
+
 from fire_etl.config import load_config
 from fire_etl.firms_download import download_all
 from fire_etl.firms_nrt import download_nrt, nrt_files

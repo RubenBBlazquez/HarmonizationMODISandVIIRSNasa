@@ -172,7 +172,9 @@ def extract_gpkg(zip_path: Path, dest_dir: Path) -> Path:
         with zipfile.ZipFile(zip_path) as archive:
             members = [name for name in archive.namelist() if name.lower().endswith(".gpkg")]
             if len(members) != 1:
-                raise SigpacLoadError(f"{zip_path.name}: se esperaba un .gpkg y hay {len(members)}.")
+                raise SigpacLoadError(
+                    f"{zip_path.name}: se esperaba un .gpkg y hay {len(members)}."
+                )
 
             # ``extract`` neutraliza rutas absolutas y ``..`` en el nombre del miembro.
             return Path(archive.extract(members[0], dest_dir))
@@ -390,7 +392,9 @@ def download_zip(remote: RemoteZip, dest_dir: Path) -> Path:
 
             return partial.replace(target)
         except OSError as error:
-            LOGGER.warning("%s: intento %d/%d falló (%s)", remote.name, attempt, DOWNLOAD_RETRIES, error)
+            LOGGER.warning(
+                "%s: intento %d/%d falló (%s)", remote.name, attempt, DOWNLOAD_RETRIES, error
+            )
             if attempt == DOWNLOAD_RETRIES:
                 partial.unlink(missing_ok=True)
                 raise SigpacLoadError(f"{remote.name}: no se pudo descargar ({error}).") from error

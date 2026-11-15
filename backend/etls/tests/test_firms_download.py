@@ -10,12 +10,7 @@ from datetime import datetime, timezone
 import pytest
 
 from fire_etl.config import DownloadConfig
-from fire_etl.firms_download import (
-    build_url,
-    download_all,
-    last_complete_year,
-    plan_downloads,
-)
+from fire_etl.firms_download import build_url, download_all, last_complete_year, plan_downloads
 
 CSV = "latitude,longitude,acq_date\n42.5,-7.2,2020-01-01\n"
 LOGIN_PAGE = "<html><body>Earthdata Login</body></html>"

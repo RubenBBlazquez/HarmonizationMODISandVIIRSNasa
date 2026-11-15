@@ -26,6 +26,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from _paths import ETLS_DIR, SAMPLE_DIR
+
 from fire_etl.config import AreaOfInterestConfig, PipelineConfig, load_config
 from fire_etl.ingest import read_firms_csv
 from fire_etl.outputs import PipelineTables, to_storage_crs

@@ -12,9 +12,9 @@ from shapely.geometry import Point
 from fire_etl.config import (
     AreaOfInterestConfig,
     DatabaseConfig,
-    LandCoverConfig,
     DownloadConfig,
     InvalidConfigError,
+    LandCoverConfig,
     PipelineConfig,
     config_from_dict,
     load_config,

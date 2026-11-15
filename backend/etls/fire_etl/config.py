@@ -146,16 +146,15 @@ class ValidationConfig:
     allowed_daynight: tuple[str, ...] = ("D", "N")
     # Marca como no válidas (``is_valid=False``, ``skip_reason="below_frp_threshold"``) las
     # detecciones por debajo del FRP mínimo de su instrumento y de día/noche. Los umbrales están
-    # en el YAML; los mínimos por defecto se ajustan a la sensibilidad publicada de píxeles pequeños.
+    # en el YAML; los mínimos por defecto se ajustan a la sensibilidad publicada de píxeles
+    # pequeños.
     apply_frp_thresholds: bool = True
     frp_thresholds_mw: dict[str, dict[str, float]] = field(
         default_factory=_default_frp_thresholds_mw
     )
     # Nombres de satélite que se unifican con los de los ficheros NRT (el archivo anual usa
     # "Aqua" / "Terra"; los NRT, "A" / "T"), para que el detection_id no duplique detecciones.
-    satellite_aliases: dict[str, str] = field(
-        default_factory=lambda: {"Aqua": "A", "Terra": "T"}
-    )
+    satellite_aliases: dict[str, str] = field(default_factory=lambda: {"Aqua": "A", "Terra": "T"})
     # Marca como no válidas las detecciones que no son incendios de vegetación: el campo ``type``
     # de FIRMS (solo en los ficheros anuales) distingue 0 = incendio de vegetación presunto de
     # 1 = volcán activo, 2 = fuente terrestre estática (industria) y 3 = detección en el mar.

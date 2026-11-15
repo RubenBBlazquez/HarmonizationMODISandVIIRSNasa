@@ -47,7 +47,12 @@ def test_valores_limite(instrumento, frp, dn, clase, categoria):
 
 @pytest.mark.parametrize(
     ("texto", "frp", "esperado"),
-    [("viirs", 50.0, 2), ("VIIRS_SNPP", 50.0, 2), ("VIIRS_NOAA20", 50.0, 2), ("MODIS_NRT", 50.0, 1)],
+    [
+        ("viirs", 50.0, 2),
+        ("VIIRS_SNPP", 50.0, 2),
+        ("VIIRS_NOAA20", 50.0, 2),
+        ("MODIS_NRT", 50.0, 1),
+    ],
 )
 def test_variantes_instrumento(texto, frp, esperado):
     assert _una(texto, frp, "D")[0] == esperado

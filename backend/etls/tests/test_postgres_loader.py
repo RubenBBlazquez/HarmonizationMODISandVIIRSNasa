@@ -101,7 +101,9 @@ def test_load_plan_follows_foreign_key_order_and_counts_rows(tables):
 
 
 def test_load_plan_converts_values_to_database_types(tables):
-    detections = next(l for l in build_load_plan(tables, "EPSG:4326") if l.table == "detections")
+    detections = next(
+        plan for plan in build_load_plan(tables, "EPSG:4326") if plan.table == "detections"
+    )
     row = dict(zip(detections.columns, detections.rows[0]))
 
     assert row["geom_point"].startswith("POINT (-7.2")

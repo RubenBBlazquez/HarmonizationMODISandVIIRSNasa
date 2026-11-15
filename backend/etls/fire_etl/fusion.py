@@ -16,8 +16,8 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from fire_etl.config import ConfidenceConfig, WindowMode
 from fire_etl.confidence import LEVEL_RANK, ConfidenceLevel, fuse_confidence
+from fire_etl.config import ConfidenceConfig, WindowMode
 from fire_etl.graph import component_labels, self_join_pairs
 from fire_etl.ingest import Source
 

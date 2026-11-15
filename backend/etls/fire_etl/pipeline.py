@@ -14,9 +14,8 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
 

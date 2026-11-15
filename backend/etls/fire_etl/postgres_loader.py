@@ -16,7 +16,6 @@ nuevas.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass

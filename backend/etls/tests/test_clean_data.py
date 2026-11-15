@@ -16,14 +16,7 @@ from fire_etl.clean_data import (
 from fire_etl.config import PipelineConfig
 from fire_etl.ingest import read_firms_csv
 from fire_etl.pipeline import process_detections, run_frames
-from tests.conftest import (
-    BASE_LAT,
-    BASE_LON,
-    MODIS_SAMPLE,
-    VIIRS_SAMPLE,
-    ingest_rows,
-    viirs_row,
-)
+from tests.conftest import BASE_LAT, BASE_LON, MODIS_SAMPLE, VIIRS_SAMPLE, ingest_rows, viirs_row
 
 
 def clean_for(config, modis=None, viirs=None):

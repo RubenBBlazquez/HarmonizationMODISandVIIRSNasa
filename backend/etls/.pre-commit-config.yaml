@@ -1,16 +1,20 @@
-# Solo afecta al paquete de ETLs. Ejecutar desde backend/etls:
-#   pre-commit run --all-files --config .pre-commit-config.yaml
+# Solo afecta al paquete de ETLs. pre-commit ejecuta los hooks desde la raíz del repositorio, por
+# eso las rutas de configuración son relativas a ella. Se puede lanzar desde cualquier carpeta:
+#   pre-commit run --all-files --config backend/etls/.pre-commit-config.yaml
 files: ^backend/etls/
 repos:
   - repo: https://github.com/psf/black
     rev: 24.10.0
     hooks:
       - id: black
+        args: [--config=backend/etls/pyproject.toml]
   - repo: https://github.com/PyCQA/isort
     rev: 5.13.2
     hooks:
       - id: isort
+        args: [--settings-path=backend/etls]
   - repo: https://github.com/PyCQA/flake8
     rev: 7.1.1
     hooks:
       - id: flake8
+        args: [--config=backend/etls/.flake8]

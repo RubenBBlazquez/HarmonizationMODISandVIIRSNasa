@@ -17,8 +17,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from fire_etl.config import ExclusionZone, PipelineConfig, ValidationConfig
 from fire_etl.confidence import normalize_modis_confidence, normalize_viirs_confidence
+from fire_etl.config import ExclusionZone, PipelineConfig, ValidationConfig
 from fire_etl.frp_classification import CATEGORY_DISCARDED, classify_frp
 
 LOGGER = logging.getLogger(__name__)

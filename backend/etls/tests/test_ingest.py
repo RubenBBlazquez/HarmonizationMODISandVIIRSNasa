@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import pandas as pd
-import pytest
-
 from dataclasses import replace
 from datetime import date
+
+import pandas as pd
+import pytest
 
 from fire_etl.config import ExclusionZone, PipelineConfig, config_from_dict
 from fire_etl.ingest import (
