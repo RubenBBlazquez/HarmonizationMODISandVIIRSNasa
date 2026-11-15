@@ -10,7 +10,7 @@ reproducen el esquema PostGIS de `backend/databases/postgis/init/01_schema.sql`.
 
 ```
 backend/etls/
-├── pyproject.toml  .flake8  .pre-commit-config.yaml  requirements.txt
+├── pyproject.toml  .flake8  requirements.txt  (el .pre-commit-config.yaml está en la raíz)
 ├── config/default.yaml        # TODOS los parámetros del algoritmo
 ├── data/sample/               # 20 filas reales de MODIS (MCD14DL) y 20 de VIIRS NOAA-20 (VJ114IMGTDL)
 ├── scripts/                   # run_pipeline.py, validate_real_fire.py (+ _paths.py)
@@ -61,7 +61,7 @@ fire-etl --config config/default.yaml \
   --output-dir output
 
 pytest --cov=fire_etl
-pre-commit run --all-files --config .pre-commit-config.yaml
+pre-commit run --all-files     # desde cualquier carpeta del repo; solo revisa backend/etls
 ```
 
 ## Diseño

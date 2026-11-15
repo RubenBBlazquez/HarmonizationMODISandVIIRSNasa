@@ -1,6 +1,6 @@
-# Solo afecta al paquete de ETLs. pre-commit ejecuta los hooks desde la raíz del repositorio, por
-# eso las rutas de configuración son relativas a ella. Se puede lanzar desde cualquier carpeta:
-#   pre-commit run --all-files --config backend/etls/.pre-commit-config.yaml
+# Solo afecta al paquete de ETLs (backend/etls). pre-commit ejecuta los hooks desde la raíz del
+# repositorio, por eso las rutas de configuración son relativas a ella.
+#   pre-commit run --all-files
 files: ^backend/etls/
 repos:
   - repo: https://github.com/psf/black
