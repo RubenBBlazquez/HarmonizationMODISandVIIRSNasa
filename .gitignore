@@ -1,19 +1,31 @@
-﻿# Python
-__pycache__/
-*.py[cod]
+# IDE y sistema operativo
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Entornos y secretos
+.env
 .venv/
 venv/
-.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Node.js / TypeScript
 node_modules/
 frontend/dist/
 dist/
 *.tsbuildinfo
-
-# IDEs and operating systems
-.idea/
-.vscode/
-.DS_Store
-Thumbs.db
 package-lock.json
+
+# Salidas generadas del pipeline
+backend/etls/output/
+backend/etls/clean_data/
+backend/etls/data/raw/
+backend/etls/.secrets/

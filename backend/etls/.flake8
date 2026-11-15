@@ -1,0 +1,6 @@
+[flake8]
+select = E,W,F,C
+ignore = W503,E203
+max-line-length = 99
+max-complexity = 15
+exclude = .venv,build,dist,.eggs

@@ -1,0 +1,162 @@
+
+# Configuración única del pipeline de fusión MODIS + VIIRS (NASA FIRMS).
+# Todos los parámetros del algoritmo viven aquí; el código no contiene valores fijos.
+
+area_of_interest:
+  # Filtro espacial en EPSG:4326. Usa `bbox` o `polygon_wkt` (o ninguno = sin filtro).
+  # MVP solo sobre España: rectángulos generosos (no se pierden detecciones españolas) para la
+  # Península + Baleares, Canarias y Melilla (Ceuta ya cae en el primero). Incluyen franjas de
+  # Portugal, Francia y Marruecos: para recortar exactamente, sustituye por el polígono de la
+  # frontera (IGN / Natural Earth) en WKT.
+  bbox: null # [min_lon, min_lat, max_lon, max_lat]
+  polygon_wkt: >-
+    MULTIPOLYGON (
+    ((-9.5 35.8, 4.5 35.8, 4.5 44.0, -9.5 44.0, -9.5 35.8)),
+    ((-18.5 27.4, -13.0 27.4, -13.0 29.6, -18.5 29.6, -18.5 27.4)),
+    ((-3.1 35.2, -2.85 35.2, -2.85 35.4, -3.1 35.4, -3.1 35.2))
+    )
+
+validation:
+  lat_range: [-90.0, 90.0]
+  lon_range: [-180.0, 180.0]
+  scan_km_range: [0.1, 10.0]
+  track_km_range: [0.1, 10.0]
+  frp_min: 0.0
+  allowed_daynight: [D, N]
+  # Marca como no válidas (is_valid=false, skip_reason="below_frp_threshold") las detecciones por
+  # debajo del FRP mínimo por instrumento y día/noche (umbrales editables en
+  # fire_etl/frp_classification.py). No se descartan: se conservan en detections.parquet pero no
+  # entran en observaciones, eventos ni clean_data.
+  apply_frp_thresholds: true
+  # Nombres de satélite que se unifican con los NRT (el archivo anual usa Aqua / Terra).
+  satellite_aliases: {Aqua: A, Terra: T}
+  # Detecciones que no son incendios de vegetación: se MARCAN (is_valid=false) con skip_reason, no
+  # se descartan. El campo `type` de FIRMS solo viene en los ficheros anuales: 0 = incendio de
+  # vegetación; el resto se marca con el motivo indicado.
+  apply_source_filters: true
+  non_wildfire_types:
+    1: active_volcano
+    2: static_land_source
+    3: offshore_detection
+  # Zonas y fechas con fuentes térmicas que `type` no separa (casi todo se clasifica como incendio
+  # de vegetación). bbox = [min_lon, min_lat, max_lon, max_lat]; fechas incluidas.
+  exclusion_zones:
+    - name: erupcion_la_palma_2021
+      bbox: [-18.00, 28.52, -17.82, 28.68]
+      start: 2021-09-19
+      end: 2021-12-31
+      reason: volcanic_eruption
+
+confidence:
+  # MODIS: confianza numérica 0-100 -> low/nominal/high.
+  modis_low_max: 29 # 0..29 -> low
+  modis_nominal_max: 79 # 30..79 -> nominal ; 80..100 -> high
+  # VIIRS: categórica. Se aceptan abreviaturas y palabras completas (los ficheros NRT usan "nominal").
+  viirs_mapping:
+    l: low
+    low: low
+    n: nominal
+    nominal: nominal
+    h: high
+    high: high
+  # Nivel fusionado de una observación con un solo sensor en confianza alta: medium | high.
+  single_sensor_high_level: medium
+  # Las observaciones low aisladas (un solo sensor, low) se marcan siempre;
+  # si true, además se excluyen del enlace a eventos.
+  discard_isolated_low: true
+
+biomass:
+  # Biomasa consumida por energía radiada (kg/MJ). FRP (MW = MJ/s) * coeficiente = kg/s.
+  coefficient_kg_per_mj: 0.368
+  # Biomasa quemada de un incendio = energía radiada (FRP integrado en el tiempo) x coeficiente.
+  # Cada pasada de satélite representa como mucho `pass_window_hours` horas (se reparte a la mitad
+  # con la pasada vecina). Detecciones a menos de `pass_gap_minutes` son de la misma pasada.
+  pass_gap_minutes: 30
+  pass_window_hours: 6
+
+geometry:
+  # CRS métrico para TODOS los cálculos de distancia/área. EPSG:25830 (ETRS89 / UTM 30N, el
+  # habitual de SIGPAC en la Península; en Canarias, UTM 28N, la distorsión de escala llega a
+  # ~2-3 %: aceptable para el MVP) o "auto"
+  # (zona UTM calculada a partir del centro del área de interés o de los datos).
+  metric_crs: "EPSG:25830"
+  storage_crs: "EPSG:4326"
+  footprint_buffer_m: 400.0
+
+windows:
+  # day_utc | hours_12 | date_daynight
+  mode: day_utc
+
+linking:
+  # Distancia máxima entre observaciones de ventanas consecutivas para unirlas en un evento.
+  max_distance_m: 1000.0
+  # Diferencia máxima de índice de ventana considerada "consecutiva".
+  max_window_gap: 1
+
+events:
+  # Horas sin detecciones a partir de las cuales un evento pasa a "closed".
+  inactive_after_hours: 48.0
+  # Instante de referencia para el estado (ISO 8601 UTC). null = última detección del dataset.
+  reference_time: null
+
+output:
+  directory: output
+  # Datos finales depurados (GeoJSON para el mapa, JSON para el chatbot).
+  clean_data_directory: clean_data
+  # Reutiliza las salidas previas del directorio como estado (event_id estable + idempotencia).
+  use_previous_state: true
+
+database:
+  # Inserta las tablas completas en PostGIS además de escribir los GeoParquet. El GeoParquet es
+  # el respaldo: si la base de datos falla, se registra el error y el pipeline continúa.
+  # Cada carga sustituye el contenido de las tablas por la foto actual (igual que output/).
+  enabled: true
+  # URL de conexión fija: PostGIS del docker-compose (usuario y clave de desarrollo local).
+  url: postgresql://fires:fires@localhost:5432/fires
+  # Reaplica backend/databases/postgis/init/01_schema.sql (idempotente) antes de cada carga.
+  apply_schema: true
+
+download:
+  # Archivo público de FIRMS por país y año (sin cuenta ni token): un CSV anual ya recortado a
+  # España. Ruta: <base_url>/<fuente>/<año>/<fuente>_<año>_<país>.csv
+  base_url: https://firms.modaps.eosdis.nasa.gov/data/country
+  country: Spain
+  # Fuente -> primer año con datos: MODIS desde nov-2000, VIIRS S-NPP desde 2012, NOAA-20 (jpss1)
+  # desde 2018.
+  sources:
+    modis: 2000
+    viirs-snpp: 2012
+    viirs-jpss1: 2018
+  start_year: 2000
+  end_year: null # null = último año completo (el año en curso todavía no está en el archivo)
+  directory: data/raw
+  timeout_s: 60
+  retries: 3
+  retry_wait_s: 2
+
+nrt:
+  # Datos casi en tiempo real (NRT) de FIRMS para el año en curso: el archivo anual solo llega al
+  # último año completo y el NRT guarda los últimos ~60 días. Los ficheros están en
+  # <base_url>/<fuente>/<región>/ y requieren un token de Earthdata.
+  enabled: true
+  base_url: https://nrt3.modaps.eosdis.nasa.gov/archive/FIRMS
+  region: Europe
+  sources: [modis-c6.1, suomi-npp-viirs-c2, noaa-20-viirs-c2, noaa-21-viirs-c2]
+  # El token NUNCA se escribe en este fichero. Se lee, por orden, de:
+  #   1. la variable de entorno cuyo NOMBRE indica token_env (export EARTHDATA_TOKEN=...), o
+  #   2. el fichero local token_file (una línea; ignorado por git; ruta relativa a etls/).
+  token_env: EARTHDATA_TOKEN
+  token_file: .secrets/earthdata_token
+  directory: data/raw/nrt
+  # Los ficheros de los últimos días crecen durante el día: se vuelven a bajar siempre.
+  refetch_days: 2
+  timeout_s: 60
+  retries: 3
+  retry_wait_s: 2
+
+land_cover:
+  # Carpeta con los recintos SIGPAC descargados del FEGA (.shp / .gpkg). null = sin enriquecer.
+  sigpac_dir: null
+  sigpac_confidence: 0.95
+  # Confianza mínima para is_agricultural / is_forest.
+  min_confidence: 0.0

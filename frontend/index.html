@@ -14,64 +14,127 @@
     @media(max-width:950px){.shell{grid-template-columns:70px 1fr}.sidebar{padding:22px 10px}.brand{justify-content:center;padding:0 0 34px}.brand-name,.section-label,.nav-label,.satellite-card{display:none}.nav button{justify-content:center;padding:12px 4px;font-size:0}.icon{font-size:17px}.nav button.active:before{margin-left:-8px}.main{padding:25px 24px}.stats{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){.shell{display:block}.sidebar{height:60px;padding:8px 14px;position:sticky;top:0;z-index:5;flex-direction:row;align-items:center;justify-content:space-between}.brand{padding:0}.nav{display:flex}.nav button{width:38px;height:40px}.nav button.active:before{display:none}.sidebar-bottom{display:none}.main{padding:20px 15px}.topbar{margin-bottom:24px}.heading{align-items:start;gap:15px;flex-direction:column}.stats{gap:9px}.stat{padding:13px}.stat strong{font-size:21px}.content-grid{grid-template-columns:1fr}.map{height:260px}.table th,.table td{padding:10px 9px}.table th:nth-child(3),.table td:nth-child(3){display:none}}
   </style>
   <style>
-    /* Vista única: actividad arriba y mapa a todo el ancho. */
-    .main { display: flex; flex-direction: column; }
-    .activity { order: 3; margin-top: 0; margin-bottom: 17px; }
-    .content-grid { order: 4; display: block; }
-    .content-grid > .panel:first-child { width: 100%; }
-    .content-grid > .panel:nth-child(2) { display: none; }
-    .content-grid .map { height: min(66vh, 620px); }
-    .heading, .stats, .nav button[data-page="Resumen"] { display: none; }
-    .topbar { margin-bottom: 18px; }
-    .sidebar { display: none; }
-    .shell { display: block; }
-    .main { max-width: none; padding: 24px 32px 40px; }
+    /* Mapa a pantalla completa; la actividad reciente flota encima como un panel plegable. */
+    body { overflow: hidden; }
+    .map { position: fixed; inset: 0; width: auto; height: auto; border-radius: 0; margin: 0; }
+    .activity-panel { position: fixed; z-index: 1000; top: 12px; right: 12px; bottom: 12px; width: 340px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; background: rgba(255,255,255,.96); border: 1px solid #dfe7dc; border-radius: 12px; box-shadow: 0 6px 24px #263c2933; transition: transform .25s ease, opacity .25s ease; }
+    .activity-panel.collapsed { transform: translateX(calc(100% + 24px)); opacity: 0; pointer-events: none; }
+    .activity-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 14px 14px 10px; border-bottom: 1px solid #edf0eb; }
+    .activity-title { font: 700 15px Manrope, sans-serif; letter-spacing: -.3px; }
+    .activity-sub { font-size: 11px; color: #6d7b72; margin-top: 2px; }
+    .history-btn { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 10px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 8px; font-size: 11px; font-weight: 600; }
+    .history-btn:hover { background: #e9f0e5; }
+    .activity-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
+    .activity-empty { padding: 14px; font-size: 12px; color: #6d7b72; }
+    .activity-item { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 9px 10px; border-radius: 8px; font: inherit; color: inherit; }
+    .activity-item:hover { background: #f0f4ee; }
+    .activity-item-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #26362c; }
+    .activity-item-meta { margin-top: 3px; font-size: 11px; color: #6d7b72; }
+    .activity-badge { font-size: 10px; font-weight: 700; border-radius: 99px; padding: 2px 8px; background: #eef1ee; color: #5b6b62; }
+    .activity-badge.active { background: #fbe9e6; color: #b03a28; }
+    .activity-reopen { position: fixed; z-index: 1000; top: 16px; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 7px; border: 1px solid #dfe7dc; border-right: 0; border-radius: 12px 0 0 12px; background: rgba(255,255,255,.96); color: #2f5d43; box-shadow: -2px 2px 12px #263c2933; transition: background .15s ease, padding .15s ease; }
+    .activity-reopen[hidden] { display: none; }
+    .activity-reopen:hover, .activity-reopen:focus-visible { background: #2f5d43; color: #fff; padding-right: 11px; }
+    .activity-reopen-label { writing-mode: vertical-rl; font-size: 11px; font-weight: 600; letter-spacing: .4px; white-space: nowrap; }
+    /* Los controles de la derecha del mapa se apartan del panel mientras está abierto. */
+    .leaflet-right { transition: right .25s ease; }
+    body.activity-open .leaflet-right { right: 364px; }
+    @media (max-width: 650px) { body.activity-open .leaflet-right { right: 0; } .activity-panel { width: calc(100vw - 24px); top: auto; height: 45vh; } }
+    /* El mapa real (Leaflet) sustituye al dibujo decorativo. */
+    .map:before, .map:after { display: none; }
+    .map { background: #e7eee2; }
+    .filters-control, .legend-control { background: rgba(255,255,255,.95); border: 1px solid #dfe7dc; border-radius: 8px; box-shadow: 0 2px 8px #263c291c; color: #405247; font-size: 11px; line-height: 1.5; padding: 10px 12px; }
+    .filters-control { display: grid; gap: 6px; min-width: 190px; }
+    .filters-control label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    /* Selector de rango de fechas (un solo elemento). */
+    .date-field { display: grid; gap: 3px; }
+    .date-range { position: relative; }
+    .date-range-toggle { width: 100%; display: flex; align-items: center; gap: 6px; text-align: left; border: 1px solid #d9e2d6; background: #fff; border-radius: 6px; padding: 5px 8px; font-size: 11px; color: #26362c; white-space: nowrap; }
+    .date-range-icon { flex: none; color: #4d7954; }
+    .date-range-toggle:hover, .date-range-toggle[aria-expanded="true"] { border-color: #9fb898; background: #f7faf5; }
+    .date-range-popover { position: absolute; top: calc(100% + 4px); left: 0; z-index: 1000; width: 540px; max-width: calc(100vw - 40px); background: #fff; border: 1px solid #dfe7dc; border-radius: 10px; box-shadow: 0 6px 20px #263c2933; padding: 10px; }
+    .date-range-popover[hidden] { display: none; }
+    .date-range-head { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
+    .date-range-head select { flex: 1; min-width: 0; font: inherit; font-size: 11px; border: 1px solid #e4e9e2; border-radius: 6px; padding: 3px; background: #fff; }
+    .date-range-head .nav { border: 0; background: #f2f5f0; border-radius: 6px; width: 24px; height: 24px; color: #2f4a39; }
+    .date-range-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px 0; }
+    .date-range-grid .weekday { text-align: center; font-size: 10px; color: #8a978e; padding: 2px 0; }
+    .date-range-grid .day { border: 0; background: none; border-radius: 6px; height: 28px; font-size: 11px; color: #26362c; }
+    .date-range-grid .day:hover:not(:disabled) { background: #eef4ea; }
+    .date-range-grid .day:disabled { color: #c3cbc5; cursor: default; }
+    .date-range-grid .day.in-range { background: #e3eedd; border-radius: 0; }
+    .date-range-grid .day.edge { background: #2f5d43; color: #fff; border-radius: 6px; }
+    .date-range-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .date-range-panel + .date-range-panel { border-left: 1px solid #edf0eb; padding-left: 14px; }
+    .date-range-panel-title { display: grid; gap: 1px; margin-bottom: 6px; }
+    .date-range-panel-title small { font-size: 9.5px; text-transform: uppercase; letter-spacing: .6px; color: #7d8a81; }
+    .date-range-panel-title b { font-size: 13px; color: #2f5d43; }
+    .date-range-note { margin: 8px 0 0; font-size: 10.5px; line-height: 1.4; color: #6d7b72; }
+    .date-range-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf0eb; }
+    .date-range-done { border: 0; background: #2f5d43; color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 11px; font-weight: 600; }
+    .date-range-done:hover { background: #27503a; }
+    @media (max-width: 640px) { .date-range-popover { width: 270px; } .date-range-panels { grid-template-columns: 1fr; } .date-range-panel + .date-range-panel { border-left: 0; padding-left: 0; border-top: 1px solid #edf0eb; padding-top: 10px; } }
+    .date-range-presets { display: flex; flex-wrap: wrap; gap: 4px; }
+    .date-range-presets button { border: 1px solid #e4e9e2; background: #fff; border-radius: 99px; padding: 3px 8px; font-size: 10.5px; color: #2f4a39; }
+    .date-range-presets button:hover { background: #f2f7ee; }
+    .filters-control .map-status { color: #5d6d63; border-top: 1px solid #edf0eb; padding-top: 6px; max-width: 230px; }
+    .legend-control i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+    .legend-item { display: flex; align-items: center; width: 100%; border: 0; background: none; padding: 3px 4px; margin: 0; border-radius: 5px; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+    .legend-item:hover { background: #f0f4ee; }
+    .legend-item i { flex: none; width: 11px; height: 11px; background: var(--c); border: 2px solid var(--c); box-sizing: border-box; }
+    .legend-item[aria-pressed="false"] { color: #9aa49d; text-decoration: line-through; }
+    .legend-item[aria-pressed="false"] i { background: transparent; }
+    .legend-reset { margin-top: 4px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 99px; padding: 2px 8px; font-size: 10.5px; cursor: pointer; }
+    .legend-reset[hidden] { display: none; }
+    /* Selección de zona y resultados. */
+    .select-area { display: flex; align-items: center; gap: 8px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 6px; padding: 6px 9px; font-size: 11px; font-weight: 600; text-align: left; }
+    .select-area svg { flex: none; color: #e2603a; }
+    .select-area span { flex: 1; }
+    .select-area kbd { font: 600 9.5px 'DM Sans', sans-serif; border: 1px solid #c9d8c2; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: #fff; color: #5d6d63; }
+    .select-area:hover { background: #e9f0e5; }
+    .select-area.active { background: #e2603a; border-color: #e2603a; color: #fff; }
+    .select-area.active svg { color: #fff; }
+    .selection-menu { display: grid; gap: 6px; min-width: 220px; font-size: 12px; }
+    .selection-menu small { color: #6d7b72; }
+    .selection-menu button { border: 1px solid #e4e9e2; background: #fff; border-radius: 6px; padding: 6px 8px; text-align: left; color: #26362c; font-size: 12px; }
+    .selection-menu button:hover { background: #f2f7ee; border-color: #c9d8c2; }
+    .results-control { width: 320px; max-height: 330px; overflow-y: auto; background: rgba(255,255,255,.97); border: 1px solid #dfe7dc; border-radius: 8px; box-shadow: 0 2px 8px #263c291c; color: #405247; font-size: 11px; line-height: 1.45; padding: 10px 12px; }
+    .results-control[hidden] { display: none; }
+    .results-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; color: #26362c; }
+    .results-close { border: 0; background: none; color: #6d7b72; font-size: 13px; }
+    .results-body p { margin: 4px 0; }
+    .results-table { width: 100%; border-collapse: collapse; margin: 6px 0; }
+    .results-table th, .results-table td { padding: 3px 4px; text-align: right; border-bottom: 1px solid #f0f2ee; }
+    .results-table th:first-child, .results-table td:first-child { text-align: left; }
+    .results-table tr.reference td { background: #fdf0ea; font-weight: 600; }
+    .results-list { margin: 4px 0 0; padding-left: 18px; }
+    .results-help { color: #6d7b72; font-size: 10.5px; background: #f6f8f4; border-radius: 6px; padding: 5px 7px; }
+    .open-tab { font-weight: 600; white-space: nowrap; }
+    .results-list button { border: 0; background: none; padding: 2px 0; text-align: left; color: #2f5d43; font-size: 11px; }
+    .results-list button:hover { text-decoration: underline; }
+    .legend-control .legend-note { color: #6d7b72; border-top: 1px solid #edf0eb; margin-top: 6px; padding-top: 6px; max-width: 190px; }
+    .legend-control div + div { margin-top: 3px; }
     .coordinates-control { background: rgba(255,255,255,.94); border: 1px solid #dfe7dc; border-radius: 8px; box-shadow: 0 2px 8px #263c291c; color: #405247; font-size: 11px; line-height: 1.55; padding: 9px 11px; min-width: 150px; }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">◉</span><span class="brand-name">TerraMatch<small>EARTH DATA LAB</small></span></div>
-      <div><p class="section-label">Espacio de trabajo</p><nav class="nav" aria-label="Navegación principal">
-        <button class="active" data-page="Resumen"><span class="icon">▦</span><span class="nav-label">Resumen</span></button>
-        <button data-page="Mapa de datos"><span class="icon">⌖</span><span class="nav-label">Mapa de datos</span></button>
-        <button data-page="Armonización"><span class="icon">◈</span><span class="nav-label">Armonización</span></button>
-        <button data-page="Colecciones"><span class="icon">▤</span><span class="nav-label">Colecciones</span></button>
-      </nav></div>
-      <div class="sidebar-bottom"><p class="section-label">Sistema</p><nav class="nav"><button data-page="Configuración"><span class="icon">⚙</span><span class="nav-label">Configuración</span></button></nav><div class="satellite-card"><strong><i class="live-dot"></i>Fuentes conectadas</strong><p>MODIS Terra · VIIRS SNPP<br>Última sincronización: hace 12 min</p></div></div>
-    </aside>
-    <main class="main">
-      <p id="hello-world" style="margin:0 0 16px;color:#4d7954;font-weight:600">Hola mundo 👋</p>
-      <header class="topbar"><div class="crumb">Proyecto <span> / </span> <b id="crumb-page">Resumen</b></div><div class="top-actions"><button class="icon-btn" aria-label="Notificaciones">♧</button><span class="avatar">DR</span></div></header>
-      <section class="heading"><div><div class="eyebrow">Panel de observación</div><h1 id="page-title">Resumen del proyecto</h1><p>Explora y compara observaciones de MODIS y VIIRS en un mismo lugar.</p></div><button class="primary" id="export">↓ &nbsp; Exportar informe</button></section>
-      <section class="stats" aria-label="Indicadores del proyecto">
-        <article class="stat"><div class="stat-top">Escenas procesadas <span class="stat-symbol">▧</span></div><strong>12.486</strong><small class="up">↑ 8,2% <span style="color:#859188">respecto al mes pasado</span></small></article>
-        <article class="stat"><div class="stat-top">Cobertura analizada <span class="stat-symbol">⌖</span></div><strong>8,4 M <small style="font:500 12px 'DM Sans';color:#718077">km²</small></strong><small>En 14 regiones de estudio</small></article>
-        <article class="stat"><div class="stat-top">Acuerdo entre sensores <span class="stat-symbol">◈</span></div><strong>94,8%</strong><small class="up">↑ 1,6 puntos <span style="color:#859188">últimos 30 días</span></small></article>
-        <article class="stat"><div class="stat-top">Última actualización <span class="stat-symbol">◷</span></div><strong style="font-size:20px">Hoy, 09:42</strong><small>MODIS Terra + VIIRS SNPP</small></article>
-      </section>
-      <section class="content-grid">
-        <article class="panel"><div class="panel-head"><div><div class="panel-title">Cobertura de observaciones</div><div class="panel-sub">Distribución de escenas armonizadas</div></div><select class="select" id="period"><option>Últimos 30 días</option><option>Últimos 7 días</option><option>Este año</option></select></div><div class="map"><div class="map-grid"></div><span class="map-label label-a">NORTE AMÉRICA</span><span class="map-label label-b">ÁFRICA ORIENTAL</span><span class="map-label label-c">SUDAMÉRICA</span><span class="hotspot spot-a"></span><span class="hotspot spot-b"></span><span class="hotspot spot-c"></span><div class="map-caption">Vista global &nbsp;·&nbsp; 14 regiones activas</div><div class="legend"><span><i style="background:#6e9b55"></i>Alta coincidencia</span><span><i style="background:#d79c50"></i>En revisión</span></div></div></article>
-        <article class="panel"><div class="panel-head"><div><div class="panel-title">Calidad de armonización</div><div class="panel-sub">Acuerdo espectral · MODIS / VIIRS</div></div><button class="select" id="more">···</button></div><div class="chart-wrap"><div class="chart-meta"><strong>94,8%</strong><span class="up">↑ 1,6% este mes</span></div><svg class="chart" viewBox="0 0 360 145" preserveAspectRatio="none" aria-label="Gráfico de calidad en ascenso"><defs><linearGradient id="fade" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#8db486" stop-opacity=".25"/><stop offset="1" stop-color="#8db486" stop-opacity="0"/></linearGradient></defs><path class="chart-grid" d="M0 20H360M0 60H360M0 100H360M0 140H360"/><path class="chart-area" d="M0 100 C25 96 26 77 52 81 S88 92 103 70 S141 77 155 61 S189 69 207 49 S237 61 258 40 S294 51 309 31 S340 36 360 19 V145H0Z"/><path class="chart-line" d="M0 100 C25 96 26 77 52 81 S88 92 103 70 S141 77 155 61 S189 69 207 49 S237 61 258 40 S294 51 309 31 S340 36 360 19"/><g class="chart-dots"><circle cx="52" cy="81" r="3"/><circle cx="103" cy="70" r="3"/><circle cx="155" cy="61" r="3"/><circle cx="207" cy="49" r="3"/><circle cx="258" cy="40" r="3"/><circle cx="309" cy="31" r="3"/><circle cx="360" cy="19" r="3"/></g></svg><div class="months"><span>15 oct</span><span>20 oct</span><span>25 oct</span><span>30 oct</span><span>4 nov</span><span>14 nov</span></div></div><div class="insight"><span>✳</span><div><b>Buena consistencia</b>La correlación entre sensores mejoró en 3 regiones esta semana.</div></div></article>
-      </section>
-      <section class="panel activity"><div class="panel-head"><div><div class="panel-title">Actividad reciente</div><div class="panel-sub">Últimas escenas añadidas al proyecto</div></div><button class="view-all" id="view-all">Ver todas &nbsp;→</button></div><table class="table"><thead><tr><th>Región</th><th>Sensor</th><th>Fecha de captura</th><th>Estado</th></tr></thead><tbody><tr><td>Amazonas, Brasil</td><td>MODIS · VIIRS</td><td>14 nov 2026</td><td><span class="badge">Armonizado</span></td></tr><tr><td>Sahel occidental</td><td>MODIS · VIIRS</td><td>13 nov 2026</td><td><span class="badge review">En revisión</span></td></tr><tr><td>Valle Central, Chile</td><td>MODIS · VIIRS</td><td>12 nov 2026</td><td><span class="badge">Armonizado</span></td></tr></tbody></table></section>
-    </main>
-  </div>
-  <script>
-    document.querySelectorAll('.nav button[data-page]').forEach(button => button.addEventListener('click', () => {
-      document.querySelectorAll('.nav button').forEach(item => item.classList.remove('active'));
-      button.classList.add('active');
-      const page = button.dataset.page;
-      document.querySelector('#crumb-page').textContent = page;
-      document.querySelector('#page-title').textContent = page === 'Resumen' ? 'Resumen del proyecto' : page;
-    }));
-    document.querySelector('#period').addEventListener('change', event => {
-      document.querySelector('.map-caption').textContent = `${event.target.value} · 14 regiones activas`;
-    });
-    document.querySelector('#export').addEventListener('click', () => window.print());
-    document.querySelector('#view-all').addEventListener('click', () => alert('Mostrando las escenas recientes del proyecto.'));
-  </script>
+  <div class="map" aria-label="Mapa de incendios"></div>
+  <aside class="activity-panel" id="activity-panel" aria-label="Actividad reciente">
+    <header class="activity-head">
+      <div><div class="activity-title">Actividad reciente</div>
+        <div class="activity-sub" id="activity-sub">Últimos incendios registrados</div></div>
+      <button type="button" class="history-btn" id="activity-hide" aria-label="Ocultar actividad reciente">
+        <span>Ocultar</span>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 6l6 6-6 6"/><path d="M13 6l6 6-6 6"/></svg>
+      </button>
+    </header>
+    <ol class="activity-list" id="activity-list"><li class="activity-empty">Cargando…</li></ol>
+  </aside>
+  <button type="button" class="activity-reopen" id="activity-show" aria-label="Mostrar actividad reciente" hidden>
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+    <span class="activity-reopen-label">Actividad reciente</span>
+  </button>
   <script type="module" src="/src/index.ts"></script>
 </body>
 </html>
