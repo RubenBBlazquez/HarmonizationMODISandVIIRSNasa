@@ -1,18 +1,34 @@
 // Utilidades comunes del mapa principal (index.ts) y de la pestaña de incendios (fires.ts).
+import L from "leaflet";
 
 // El navegador llama a /api/... y Vite lo reenvía a la API (ver vite.config.ts).
 export const API_BASE = "/api";
 export const HISTORY_YEARS = 10;
 
 export const FRP_COLORS: Record<string, string> = {
-  baja: "#e0b43c",
-  media: "#e8833a",
-  alta: "#c0392b",
+  low: "#e0b43c",
+  medium: "#e8833a",
+  high: "#c0392b",
 };
 export const NO_CATEGORY_COLOR = "#8a8f98";
 export const EVENT_COLORS: Record<string, string> = { active: "#c0392b", closed: "#5b6b62" };
 export const PIXEL_BORDER_COLOR = "#4a4f55";
 export const PIXEL_FILL_OPACITY = 0.45;
+// VIIRS (375 m) es más preciso que MODIS (1 km): sus píxeles destacan y los de MODIS quedan de fondo.
+export const MODIS_PIXEL_FILL_OPACITY = 0.1;
+export const MODIS_PIXEL_BORDER_OPACITY = 0.35;
+
+/** Estilo de un píxel: VIIRS opaco y con borde marcado; MODIS muy transparente y de fondo. */
+export function pixelStyle(feature: GeoJSON.Feature | undefined): L.PathOptions {
+  const isModis = feature?.properties?.source === "MODIS";
+  return {
+    color: PIXEL_BORDER_COLOR,
+    weight: isModis ? 1 : 1.5,
+    opacity: isModis ? MODIS_PIXEL_BORDER_OPACITY : 1,
+    fillColor: FRP_COLORS[String(feature?.properties?.frp_category)] ?? NO_CATEGORY_COLOR,
+    fillOpacity: isModis ? MODIS_PIXEL_FILL_OPACITY : PIXEL_FILL_OPACITY,
+  };
+}
 
 /** Cómo se estima la biomasa quemada, para explicarlo en la interfaz. */
 export const BIOMASS_HELP =
@@ -54,6 +70,30 @@ export const CONFIDENCE_COLORS: Record<string, string> = {
   high: "#c0392b",
   very_high: "#8e1f2f",
 };
+
+// Orden de menor a mayor confianza (nominal, de VIIRS, equivale a una confianza media).
+const CONFIDENCE_RANK: Record<string, number> = {
+  low: 0,
+  medium: 1,
+  nominal: 1,
+  high: 2,
+  very_high: 3,
+};
+
+/** Copia de la colección con VIIRS y las de mayor confianza al final (se dibujan encima). */
+export function sortByConfidence<T extends GeoJSON.FeatureCollection>(collection: T): T {
+  const rank = (feature: GeoJSON.Feature): number =>
+    CONFIDENCE_RANK[String(feature.properties?.confidence)] ?? -1;
+  // A igual confianza, mayor FRP encima (el color ya depende de él).
+  const frp = (feature: GeoJSON.Feature): number => Number(feature.properties?.frp_mw) || 0;
+  // MODIS siempre debajo de VIIRS: su píxel es mayor y taparía a los de VIIRS.
+  const viirs = (feature: GeoJSON.Feature): number =>
+    feature.properties?.source === "MODIS" ? 0 : 1;
+  const features = [...collection.features].sort(
+    (a, b) => viirs(a) - viirs(b) || rank(a) - rank(b) || frp(a) - frp(b),
+  );
+  return { ...collection, features };
+}
 
 export type Properties = Record<string, string | number | null>;
 export type FireFeature = GeoJSON.Feature<GeoJSON.Geometry, Properties>;
@@ -235,4 +275,34 @@ export function eventPopup(properties: Properties): string {
     (${passesLabel(properties)})<br>
     Confianza: ${confidenceLabel(properties.confidence)}<br>
     Huella: ${escapeHtml(properties.footprint_area_km2)} km² (no es superficie quemada)`;
+}
+
+// --- Tooltips fijables: con el tooltip abierto, Shift lo deja fijo en el mapa (Esc los quita) ---
+let hoveredTooltip: L.Tooltip | null = null;
+const pinnedTooltips: L.Tooltip[] = [];
+
+/** Como `bindTooltip` (sticky, arriba), pero registrando el tooltip para poder fijarlo con Shift. */
+export function bindPinnableTooltip(layer: L.Layer, content: string): void {
+  layer.bindTooltip(content, { sticky: true, direction: "top" });
+  layer.on("tooltipopen", (event) => {
+    hoveredTooltip = (event as L.TooltipEvent).tooltip;
+  });
+  layer.on("tooltipclose", (event) => {
+    if (hoveredTooltip === (event as L.TooltipEvent).tooltip) hoveredTooltip = null;
+  });
+}
+
+/** Activa Shift (fija el tooltip bajo el cursor) y Esc (quita los fijados) sobre el mapa. */
+export function enableTooltipPinning(map: L.Map): void {
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      pinnedTooltips.splice(0).forEach((tooltip) => tooltip.remove());
+    } else if (event.key === "Shift" && !event.repeat && hoveredTooltip) {
+      const pinned = L.tooltip({ permanent: true, direction: "top", interactive: false })
+        .setLatLng(hoveredTooltip.getLatLng())
+        .setContent(hoveredTooltip.getContent() as string);
+      pinned.addTo(map);
+      pinnedTooltips.push(pinned);
+    }
+  });
 }
