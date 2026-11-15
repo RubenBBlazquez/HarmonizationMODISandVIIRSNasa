@@ -77,17 +77,19 @@ def test_enrich_known_coordinates_with_sigpac(sigpac_dir):
     rows = enriched.set_index("id")
 
     assert "land_cover_prev" in enriched.columns
-    assert rows.loc[0, ["land_cover", "land_cover_source", "sigpac_uso"]].tolist() == [
+    assert rows.loc[0, ["land_cover", "land_cover_source", "sigpac_use"]].tolist() == [
         "crops",
         "sigpac",
         "TA",
     ]
     assert rows.loc[0, "land_cover_confidence"] == 0.95
     assert bool(rows.loc[0, "is_agricultural"]) and not bool(rows.loc[0, "is_forest"])
+    assert rows.loc[1, ["land_cover", "sigpac_use"]].tolist() == ["crops|grass", "PS|TA"]
+    assert bool(rows.loc[1, "is_agricultural"]) and not bool(rows.loc[1, "is_forest"])
     assert rows.loc[1, "land_cover_source"] == "sigpac"
-    assert rows.loc[2, ["land_cover", "sigpac_uso"]].tolist() == ["other", "XX"]
+    assert rows.loc[2, ["land_cover", "sigpac_use"]].tolist() == ["other", "XX"]
     for empty in (3, 4):  # sin recinto / coordenadas inválidas: campos vacíos, sin fallar
-        assert rows.loc[empty, ["land_cover", "land_cover_source", "sigpac_uso"]].isna().all()
+        assert rows.loc[empty, ["land_cover", "land_cover_source", "sigpac_use"]].isna().all()
         assert pd.isna(rows.loc[empty, "land_cover_confidence"])
         assert rows.loc[empty, ["is_agricultural", "is_forest"]].isna().all()
 
@@ -128,3 +130,22 @@ def test_enrich_empty_sigpac_folder_leaves_fields_empty(tmp_path, caplog):
     assert pd.isna(enriched.loc[0, "land_cover"])
     assert summary.no_data == 1 and summary.sigpac == 0
     assert "no hay capas" in caplog.text
+
+
+def test_enrich_point_between_forest_and_crops_flags_both(tmp_path):
+    folder = tmp_path / "sigpac"
+    folder.mkdir()
+    recintos = gpd.GeoDataFrame(
+        {"uso_sigpac": ["FO", "TA"]},
+        geometry=[_square(*POINT_TA, 0.002), _square(*POINT_TA, 0.001)],
+        crs=4326,
+    ).to_crs(25830)
+    recintos.to_file(folder / "mixto.gpkg", layer="mixto", driver="GPKG")
+    df = pd.DataFrame({"id": [1], "lat": [POINT_TA[0]], "lon": [POINT_TA[1]]})
+
+    enriched, summary = enrich(df, folder)
+
+    assert enriched.loc[0, "land_cover"] == "crops|trees"
+    assert enriched.loc[0, "sigpac_use"] == "FO|TA"
+    assert bool(enriched.loc[0, "is_forest"]) and bool(enriched.loc[0, "is_agricultural"])
+    assert summary.multiple_recintos == 1

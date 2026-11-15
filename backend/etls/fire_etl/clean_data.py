@@ -31,7 +31,7 @@ import pandas as pd
 from shapely.geometry import Point, mapping
 
 from fire_etl.config import PipelineConfig
-from fire_etl.frp_classification import CATEGORIA_ALTA, CATEGORIA_BAJA, CATEGORIA_MEDIA
+from fire_etl.frp_classification import CATEGORY_HIGH, CATEGORY_LOW, CATEGORY_MEDIUM
 from fire_etl.outputs import PipelineTables
 
 EVENTS_GEOJSON = "fire_events.geojson"
@@ -47,7 +47,8 @@ SECONDS_PER_HOUR = 3600
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 DISPLAY_FORMAT = "%d/%m/%Y %H:%M"
 
-FRP_CATEGORY_BY_CLASS = {1: CATEGORIA_BAJA, 2: CATEGORIA_MEDIA, 3: CATEGORIA_ALTA}
+FRP_CATEGORY_ES = {"low": "baja", "medium": "media", "high": "alta"}
+FRP_CATEGORY_BY_CLASS = {1: CATEGORY_LOW, 2: CATEGORY_MEDIUM, 3: CATEGORY_HIGH}
 STATUS_ES = {"active": "activo", "closed": "cerrado"}
 CONFIDENCE_ES = {"low": "baja", "medium": "media", "high": "alta", "very_high": "muy alta"}
 LAND_COVER_ES = {
@@ -172,14 +173,14 @@ def _frp_category(classes: pd.Series) -> pd.Series:
 
 def _event_detection_facts(tables: PipelineTables) -> pd.DataFrame:
     """Categoría de FRP máxima y cobertura del suelo dominante de cada evento."""
-    columns = ["detection_id", "frp_clase"]
+    columns = ["detection_id", "frp_class"]
     if "land_cover" in tables.detections.columns:
         columns.append("land_cover")
 
     link = tables.event_detections[["event_id", "detection_id"]]
     merged = link.merge(pd.DataFrame(tables.detections[columns]), on="detection_id")
     grouped = merged.groupby("event_id")
-    facts = pd.DataFrame({"frp_category": _frp_category(grouped["frp_clase"].max())})
+    facts = pd.DataFrame({"frp_category": _frp_category(grouped["frp_class"].max())})
     facts["land_cover"] = grouped["land_cover"].agg(_mode) if "land_cover" in merged else None
 
     return facts.reset_index()
@@ -188,7 +189,7 @@ def _event_detection_facts(tables: PipelineTables) -> pd.DataFrame:
 def _summary(row: pd.Series) -> str:
     """Frase en castellano que resume el evento (para el chatbot y los popups del mapa)."""
     sensors = " + ".join(str(row["sensors"]).split(","))
-    category = row["frp_category"] if isinstance(row["frp_category"], str) else "sin clasificar"
+    category = FRP_CATEGORY_ES.get(row["frp_category"], "sin clasificar")
     text = (
         f"Incendio {STATUS_ES.get(row['status'], row['status'])} detectado por {sensors} "
         f"en torno a ({row['lat']:.4f}, {row['lon']:.4f}), entre "
@@ -201,7 +202,8 @@ def _summary(row: pd.Series) -> str:
         f"estimada: {row['biomass_burned_t']:g} t."
     )
     if isinstance(row["land_cover"], str):
-        text += f" Cobertura del suelo: {LAND_COVER_ES.get(row['land_cover'], row['land_cover'])}."
+        covers = [LAND_COVER_ES.get(part, part) for part in row["land_cover"].split("|")]
+        text += f" Cobertura del suelo: {' / '.join(covers)}."
 
     return text
 
@@ -286,7 +288,7 @@ def _clean_detections(tables: PipelineTables, storage_crs: str) -> pd.DataFrame:
             "lat": points.y.round(COORD_DECIMALS),
             "lon": points.x.round(COORD_DECIMALS),
             "frp_mw": detections["frp"].round(2),
-            "frp_category": _frp_category(detections["frp_clase"]),
+            "frp_category": _frp_category(detections["frp_class"]),
             "biomass_kg_s": detections["biomass_kg_s"].round(3),
             "confidence": detections["confidence_norm"],
             "daynight": detections["daynight"],
@@ -321,7 +323,7 @@ def build_clean_data(tables: PipelineTables, config: PipelineConfig) -> CleanDat
     detections = _clean_detections(tables, storage_crs)
 
     sources = [FIRMS_SOURCE]
-    if config.land_cover.sigpac_dir:
+    if config.land_cover.use_database or config.land_cover.sigpac_dir:
         sources.append(SIGPAC_SOURCE)
 
     metadata = {

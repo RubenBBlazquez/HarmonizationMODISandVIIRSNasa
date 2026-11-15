@@ -56,7 +56,7 @@ def detection_row(index: int = 0) -> dict:
         "acq_datetime": WHEN,
         "daynight": "D",
         "frp": 12.3456,
-        "frp_categoria": "baja",
+        "frp_category": "low",
         "biomass_kg_s": 4.5432,
         "confidence_norm": "nominal",
         "land_cover": None,
@@ -93,7 +93,7 @@ def test_detections_query_combines_all_filters_in_a_stable_order():
         start=date(2022, 1, 1),
         end=date(2022, 12, 31),
         source="MODIS",
-        frp_category="alta",
+        frp_category="high",
         limit=10,
     )
 
@@ -101,11 +101,11 @@ def test_detections_query_combines_all_filters_in_a_stable_order():
 
     assert "d.geom_point && ST_MakeEnvelope(%s, %s, %s, %s, 4326)" in query.sql
     assert "d.acq_datetime >= %s" in query.sql and "d.acq_datetime < %s" in query.sql
-    assert "d.source = %s" in query.sql and "d.frp_categoria = %s" in query.sql
+    assert "d.source = %s" in query.sql and "d.frp_category = %s" in query.sql
     assert query.params[:4] == SPAIN_BBOX
     assert query.params[4] == datetime(2022, 1, 1, tzinfo=timezone.utc)
     assert query.params[5] == datetime(2023, 1, 1, tzinfo=timezone.utc)  # end incluido
-    assert query.params[6:] == ("MODIS", "alta")
+    assert query.params[6:] == ("MODIS", "high")
     assert query.sql.count("%s") == len(query.params) + 1  # + LIMIT
 
 

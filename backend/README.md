@@ -36,7 +36,7 @@ Todos son de solo lectura y devuelven GeoJSON (`application/geo+json`).
 
 Filtros comunes: `bbox=minLon,minLat,maxLon,maxLat`, `start=AAAA-MM-DD`, `end=AAAA-MM-DD`
 (ambas incluidas), `source=MODIS|VIIRS` y `limit` (por defecto 5000, máximo 50000).
-`/api/detections` admite además `frp_category=baja|media|alta`.
+`/api/detections` admite además `frp_category=low|medium|high`.
 
 `geometry=pixel` devuelve el rectángulo `scan` × `track` km centrado en el punto (sin el buffer de
 400 m que el pipeline usa para agrupar), construido en el CRS métrico del pipeline (EPSG:25830) y

@@ -21,8 +21,8 @@ CREATE TABLE IF NOT EXISTS fire.detections (
     track               double precision NOT NULL,      -- km
     frp                 double precision NOT NULL,      -- MW
     biomass_kg_s        double precision NOT NULL,      -- frp * coeficiente (kg/MJ): tasa en kg/s
-    frp_clase           smallint        CHECK (frp_clase IN (1, 2, 3)),  -- 1 baja, 2 media, 3 alta
-    frp_categoria       text            CHECK (frp_categoria IN ('baja', 'media', 'alta', 'descartado')),
+    frp_class           smallint        CHECK (frp_class IN (0, 1, 2, 3)),  -- 0 discarded, 1 low, 2 medium, 3 high
+    frp_category       text            CHECK (frp_category IN ('low', 'medium', 'high', 'discarded', 'unknown')),
     is_valid            boolean         NOT NULL DEFAULT true,
     skip_reason         text,                           -- NULL si is_valid; si no, la razón
     daynight            char(1)         NOT NULL CHECK (daynight IN ('D', 'N')),
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS fire.detections (
     land_cover              text,                       -- SIGPAC normalizado (opcional)
     land_cover_confidence   double precision,
     land_cover_source       text,
-    sigpac_uso              text,                       -- código de uso SIGPAC original
+    sigpac_use              text,                       -- código de uso SIGPAC original
     is_agricultural         boolean,
     is_forest               boolean,
     geom_point          geometry(Point, 4326)   NOT NULL,
@@ -67,8 +67,8 @@ CREATE TABLE IF NOT EXISTS fire.fire_events (
     max_pass_gap_hours          double precision,           -- mayor hueco entre pasadas (0 si solo 1)
     fre_mj                      double precision,           -- energía radiada estimada (FRP integrado)
     biomass_burned_kg           double precision,           -- fre_mj * coeficiente (kg/MJ): ESTIMACIÓN
-    confidence_modis            text,
-    confidence_viirs            text,
+    confidence_modis            text            NOT NULL DEFAULT 'not_observed',  -- low/nominal/high
+    confidence_viirs            text            NOT NULL DEFAULT 'not_observed',
     confidence_fused            text            NOT NULL
         CHECK (confidence_fused IN ('low', 'medium', 'high', 'very_high')),
     hull_area_m2                double precision NOT NULL,
@@ -148,23 +148,49 @@ CREATE TABLE IF NOT EXISTS fire.event_merges (
 
 -- Migraciones idempotentes: columnas añadidas después de la primera versión del esquema.
 -- (Las bases creadas con un esquema antiguo las reciben al reaplicar este script.)
+-- Migración de nombres en castellano a inglés (bases creadas con el esquema anterior).
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'fire'
+               AND table_name = 'detections' AND column_name = 'frp_clase') THEN
+        ALTER TABLE fire.detections RENAME COLUMN frp_clase TO frp_class;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'fire'
+               AND table_name = 'detections' AND column_name = 'frp_categoria') THEN
+        ALTER TABLE fire.detections RENAME COLUMN frp_categoria TO frp_category;
+        ALTER TABLE fire.detections DROP CONSTRAINT IF EXISTS detections_frp_categoria_check;
+        UPDATE fire.detections SET frp_category = CASE frp_category
+            WHEN 'baja' THEN 'low' WHEN 'media' THEN 'medium' WHEN 'alta' THEN 'high'
+            WHEN 'descartado' THEN 'discarded' ELSE frp_category END;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'fire'
+               AND table_name = 'detections' AND column_name = 'sigpac_uso') THEN
+        ALTER TABLE fire.detections RENAME COLUMN sigpac_uso TO sigpac_use;
+    END IF;
+END $$;
+
 ALTER TABLE fire.detections
     ADD COLUMN IF NOT EXISTS biomass_kg_s double precision,
-    ADD COLUMN IF NOT EXISTS frp_clase smallint,
-    ADD COLUMN IF NOT EXISTS frp_categoria text,
+    ADD COLUMN IF NOT EXISTS frp_class smallint,
+    ADD COLUMN IF NOT EXISTS frp_category text,
     ADD COLUMN IF NOT EXISTS is_valid boolean NOT NULL DEFAULT true,
     ADD COLUMN IF NOT EXISTS skip_reason text,
     ADD COLUMN IF NOT EXISTS land_cover text,
     ADD COLUMN IF NOT EXISTS land_cover_confidence double precision,
     ADD COLUMN IF NOT EXISTS land_cover_source text,
-    ADD COLUMN IF NOT EXISTS sigpac_uso text,
+    ADD COLUMN IF NOT EXISTS sigpac_use text,
     ADD COLUMN IF NOT EXISTS is_agricultural boolean,
     ADD COLUMN IF NOT EXISTS is_forest boolean;
 
 ALTER TABLE fire.detections
-    DROP CONSTRAINT IF EXISTS detections_frp_categoria_check,
-    ADD CONSTRAINT detections_frp_categoria_check
-        CHECK (frp_categoria IN ('baja', 'media', 'alta', 'descartado'));
+    DROP CONSTRAINT IF EXISTS detections_frp_class_check,
+    ADD CONSTRAINT detections_frp_class_check CHECK (frp_class IN (0, 1, 2, 3)),
+    DROP CONSTRAINT IF EXISTS detections_frp_category_check,
+    ADD CONSTRAINT detections_frp_category_check
+        CHECK (frp_category IN ('low', 'medium', 'high', 'discarded', 'unknown'));
+
+UPDATE fire.fire_events SET confidence_modis = 'not_observed' WHERE confidence_modis IS NULL;
+UPDATE fire.fire_events SET confidence_viirs = 'not_observed' WHERE confidence_viirs IS NULL;
 
 ALTER TABLE fire.observations
     ADD COLUMN IF NOT EXISTS biomass_total_kg_s double precision,

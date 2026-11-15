@@ -56,7 +56,7 @@ def test_clean_events_have_only_final_columns_and_readable_values(midnight_event
     assert event["lat"] == pytest.approx(BASE_LAT, abs=0.01)
     assert event["lon"] == pytest.approx(BASE_LON, abs=0.01)
     assert event["frp_max_mw"] == 60.0
-    assert event["frp_category"] == "media"
+    assert event["frp_category"] == "medium"
     assert event["footprint_area_km2"] > 0
     assert len(event["frp_series"]) == 2
 
@@ -110,7 +110,7 @@ def test_flagged_noise_stays_in_detections_but_not_in_events_or_clean_data():
     enabled = PipelineConfig()
     rows = [
         viirs_row("2026-09-15 12:00", frp=50.0),  # válida
-        viirs_row("2026-09-15 12:00", north_m=20_000, frp=5.0),  # < 15 MW de día: ruido
+        viirs_row("2026-09-15 12:00", north_m=20_000, frp=3.6),  # < 3,7 MW de día: ruido
     ]
 
     tables = process_detections(ingest_rows(enabled, viirs=rows), enabled)
@@ -118,10 +118,10 @@ def test_flagged_noise_stays_in_detections_but_not_in_events_or_clean_data():
     detections = tables.detections.set_index("frp")
 
     assert len(tables.detections) == 2
-    assert detections["is_valid"].to_dict() == {50.0: True, 5.0: False}
-    assert detections.loc[5.0, "skip_reason"] == "below_frp_threshold"
+    assert detections["is_valid"].to_dict() == {50.0: True, 3.6: False}
+    assert detections.loc[3.6, "skip_reason"] == "below_frp_threshold"
     assert detections.loc[50.0, "skip_reason"] is None
-    assert pd.isna(detections.loc[5.0, "observation_id"])
+    assert pd.isna(detections.loc[3.6, "observation_id"])
     assert len(tables.events) == 1 and len(tables.event_detections) == 1
     assert len(clean.detections) == 1
     assert tables.run_parameters["counts"]["skipped_detections"] == 1

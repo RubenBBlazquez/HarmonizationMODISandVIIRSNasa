@@ -56,7 +56,7 @@ class Filters:
     source : str | None
         ``MODIS`` o ``VIIRS``.
     frp_category : str | None
-        ``baja``, ``media`` o ``alta`` (solo detecciones).
+        ``low``, ``medium`` o ``high`` (solo detecciones).
     limit : int
         Máximo de elementos devueltos.
     """
@@ -160,7 +160,7 @@ def detections_query(filters: Filters, geometry: str = "point") -> Query:
         "d.source = %s",
     )
     if filters.frp_category is not None:
-        where += " AND d.frp_categoria = %s"
+        where += " AND d.frp_category = %s"
         params.append(filters.frp_category)
 
     tables = (
@@ -176,7 +176,7 @@ def detections_query(filters: Filters, geometry: str = "point") -> Query:
 
     sql = (
         "SELECT d.detection_id, d.source, d.satellite, d.acq_datetime, d.daynight, d.frp, "
-        "d.frp_categoria, d.biomass_kg_s, d.confidence_norm, d.land_cover, d.scan, d.track, "
+        "d.frp_category, d.biomass_kg_s, d.confidence_norm, d.land_cover, d.scan, d.track, "
         f"ed.event_id, ST_AsGeoJSON({geom}, {COORD_DECIMALS})::json AS geometry "
         f"{rows_from} WHERE {where} ORDER BY d.acq_datetime DESC, d.detection_id LIMIT %s"
     )
@@ -292,7 +292,7 @@ def detection_feature(row: dict[str, Any]) -> dict[str, Any]:
         "acq_datetime": _timestamp(row["acq_datetime"]),
         "daynight": row["daynight"],
         "frp_mw": _round(row["frp"], 2),
-        "frp_category": row["frp_categoria"],
+        "frp_category": row["frp_category"],
         "biomass_kg_s": _round(row["biomass_kg_s"], 3),
         "confidence": row["confidence_norm"],
         "land_cover": row["land_cover"],
@@ -618,7 +618,7 @@ def event_detections_sql() -> str:
     """Detecciones de un evento con la geometría de su píxel, de la más antigua a la más nueva."""
     return (
         "SELECT d.detection_id, d.source, d.satellite, d.acq_datetime, d.daynight, d.frp, "
-        "d.frp_categoria, d.biomass_kg_s, d.confidence_norm, d.land_cover, d.scan, d.track, "
+        "d.frp_category, d.biomass_kg_s, d.confidence_norm, d.land_cover, d.scan, d.track, "
         f"ed.event_id, ST_AsGeoJSON({pixel_geometry_sql()}, {COORD_DECIMALS})::json AS geometry "
         "FROM fire.event_detections ed "
         "JOIN fire.detections d ON d.detection_id = ed.detection_id "

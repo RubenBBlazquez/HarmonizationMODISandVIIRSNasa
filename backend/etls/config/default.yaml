@@ -24,10 +24,14 @@ validation:
   frp_min: 0.0
   allowed_daynight: [D, N]
   # Marca como no válidas (is_valid=false, skip_reason="below_frp_threshold") las detecciones por
-  # debajo del FRP mínimo por instrumento y día/noche (umbrales editables en
-  # fire_etl/frp_classification.py). No se descartan: se conservan en detections.parquet pero no
-  # entran en observaciones, eventos ni clean_data.
+  # debajo del FRP mínimo por instrumento y día/noche. No se descartan: se conservan en
+  # detections.parquet pero no entran en observaciones, eventos ni clean_data.
   apply_frp_thresholds: true
+  # MW. Mínimos conservadores cercanos a la sensibilidad publicada de los píxeles más pequeños,
+  # para no ocultar incendios pequeños ya detectados por FIRMS. Ajustar con históricos locales.
+  frp_thresholds_mw:
+    VIIRS: {min_day: 3.7, min_night: 0.7, limit_low: 35.0, limit_medium: 70.0}
+    MODIS: {min_day: 5.7, min_night: 3.7, limit_low: 75.0, limit_medium: 175.0}
   # Nombres de satélite que se unifican con los NRT (el archivo anual usa Aqua / Terra).
   satellite_aliases: {Aqua: A, Terra: T}
   # Detecciones que no son incendios de vegetación: se MARCAN (is_valid=false) con skip_reason, no
@@ -155,6 +159,8 @@ nrt:
   retry_wait_s: 2
 
 land_cover:
+  # true = consulta fire.sigpac_recintos en PostGIS (database.url); tiene prioridad sobre sigpac_dir.
+  use_database: true
   # Carpeta con los recintos SIGPAC descargados del FEGA (.shp / .gpkg). null = sin enriquecer.
   sigpac_dir: null
   sigpac_confidence: 0.95

@@ -28,7 +28,7 @@ def get_filters(
     end: Annotated[date | None, Query(description="Hasta (UTC, incluida).")] = None,
     source: Annotated[Literal["MODIS", "VIIRS"] | None, Query()] = None,
     frp_category: Annotated[
-        Literal["baja", "media", "alta"] | None,
+        Literal["low", "medium", "high"] | None,
         Query(description="Solo detecciones."),
     ] = None,
     limit: Annotated[int, Query(ge=1, le=queries.MAX_LIMIT)] = queries.DEFAULT_LIMIT,

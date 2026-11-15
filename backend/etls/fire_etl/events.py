@@ -28,6 +28,8 @@ from fire_etl.energy import event_energy
 from fire_etl.fusion import ObservationResult, short_hash
 from fire_etl.graph import component_labels, self_join_pairs
 
+NOT_OBSERVED = "not_observed"  # sensor que no vio el evento (en vez de nulo)
+
 EVENT_COLUMNS = (
     "event_id",
     "first_detection",
@@ -309,8 +311,8 @@ def summarize_events(
     events["sensors"] = by_observation["sensors"].agg(
         lambda values: ",".join(sorted({s for value in values for s in value.split(",")}))
     )
-    events["confidence_modis"] = by_observation["confidence_modis"].agg(max_level)
-    events["confidence_viirs"] = by_observation["confidence_viirs"].agg(max_level)
+    for column in ("confidence_modis", "confidence_viirs"):
+        events[column] = by_observation[column].agg(max_level).fillna(NOT_OBSERVED)
     events["confidence_fused"] = by_observation["confidence_fused"].agg(max_fused)
     events["frp_series"] = _frp_series(observations)
     events = events.join(event_energy(detections, config.biomass))

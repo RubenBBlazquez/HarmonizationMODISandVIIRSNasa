@@ -112,12 +112,12 @@ def test_ingest_deduplicates_by_deterministic_detection_id(config):
 def test_frp_thresholds_flag_noise_instead_of_discarding_it():
     enabled = PipelineConfig()
     modis = [
-        modis_row("2026-09-15 10:00", frp=10.0),  # día, < 30 MW: ruido
+        modis_row("2026-09-15 10:00", frp=5.6),  # día, < 5,7 MW: ruido
         modis_row("2026-09-15 10:00", north_m=5000, frp=100.0),  # día: media
     ]
     viirs = [
-        viirs_row("2026-09-15 02:00", daynight="N", frp=5.0),  # noche, < 6 MW: ruido
-        viirs_row("2026-09-15 02:00", north_m=5000, daynight="N", frp=8.0),  # noche: baja
+        viirs_row("2026-09-15 02:00", daynight="N", frp=0.6),  # noche, < 0,7 MW: ruido
+        viirs_row("2026-09-15 02:00", north_m=5000, daynight="N", frp=0.8),  # noche: baja
     ]
 
     result = ingest_rows(enabled, modis=modis, viirs=viirs)
@@ -125,11 +125,38 @@ def test_frp_thresholds_flag_noise_instead_of_discarding_it():
 
     assert len(result.detections) == 4
     assert result.discarded.empty
-    assert rows["is_valid"].to_dict() == {10.0: False, 100.0: True, 5.0: False, 8.0: True}
-    assert rows.loc[[10.0, 5.0], "skip_reason"].tolist() == ["below_frp_threshold"] * 2
-    assert rows.loc[[100.0, 8.0], "skip_reason"].isna().all()
-    assert rows.loc[100.0, "frp_categoria"] == "media"
-    assert rows.loc[8.0, "frp_categoria"] == "baja"
+    assert rows["is_valid"].to_dict() == {5.6: False, 100.0: True, 0.6: False, 0.8: True}
+    assert rows.loc[[5.6, 0.6], "skip_reason"].tolist() == ["below_frp_threshold"] * 2
+    assert rows.loc[[100.0, 0.8], "skip_reason"].isna().all()
+    assert rows.loc[100.0, "frp_category"] == "medium"
+    assert rows.loc[0.8, "frp_category"] == "low"
+
+
+def test_frp_thresholds_are_read_from_configuration():
+    config = config_from_dict(
+        {
+            "validation": {
+                "frp_thresholds_mw": {
+                    "VIIRS": {
+                        "min_day": 20.0,
+                        "min_night": 0.7,
+                        "limit_low": 35.0,
+                        "limit_medium": 70.0,
+                    },
+                    "MODIS": {
+                        "min_day": 5.7,
+                        "min_night": 3.7,
+                        "limit_low": 75.0,
+                        "limit_medium": 175.0,
+                    },
+                }
+            }
+        }
+    )
+
+    result = ingest_rows(config, viirs=[viirs_row("2026-09-15 10:00", frp=10.0)])
+
+    assert result.detections["skip_reason"].tolist() == ["below_frp_threshold"]
 
 
 def test_frp_thresholds_can_be_disabled(config):
@@ -255,7 +282,7 @@ def test_type_reason_wins_over_zone_and_frp_reasons():
     enabled = PipelineConfig()
     zone = ExclusionZone("z", (BASE_LON - 1, BASE_LAT - 1, BASE_LON + 1, BASE_LAT + 1))
     cfg = replace(enabled, validation=replace(enabled.validation, exclusion_zones=(zone,)))
-    row = {**viirs_row("2022-06-16 01:15", daynight="N", frp=1.0), "type": "2"}  # FRP bajo + zona
+    row = {**viirs_row("2022-06-16 01:15", daynight="N", frp=0.6), "type": "2"}  # FRP bajo + zona
 
     result = ingest_frames([archive_frame([row])], cfg).detections
 

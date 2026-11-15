@@ -109,7 +109,7 @@ def test_load_plan_converts_values_to_database_types(tables):
     assert isinstance(row["acq_datetime"], dt.datetime) and row["acq_datetime"].tzinfo
     assert row["is_valid"] is True and row["skip_reason"] is None
     assert isinstance(row["frp"], float) and isinstance(row["is_representative"], bool)
-    assert row["frp_clase"] == 2  # int de Python, no numpy ni pd.NA
+    assert row["frp_class"] == 2  # int de Python, no numpy ni pd.NA
 
 
 def test_insert_statement_casts_geometries_and_json(tables):
