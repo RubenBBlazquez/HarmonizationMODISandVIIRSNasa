@@ -3,6 +3,7 @@ import "leaflet/dist/leaflet.css";
 
 import {
   BIOMASS_HELP,
+  CONFIDENCE_COLORS,
   DETECTION_HELP,
   EVENT_COLORS,
   FRP_COLORS,
@@ -155,6 +156,52 @@ if (mapContainer) {
   const statusElement = document.querySelector<HTMLElement>("#map-status")!;
   const selectButton = document.querySelector<HTMLButtonElement>("#select-area")!;
 
+  const alerts = new L.Control({ position: "topleft" });
+  alerts.onAdd = () => {
+    const element = L.DomUtil.create("div", "alerts-control");
+    element.innerHTML = `<button type="button" class="alerts-toggle" aria-expanded="false">
+      <span class="alerts-bell" aria-hidden="true">⚠</span><span class="alerts-count">0</span>
+      <span>Alertas activas</span></button><div class="alerts-list" hidden></div>`;
+    L.DomEvent.disableClickPropagation(element);
+    return element;
+  };
+  alerts.addTo(map);
+  const alertsElement = document.querySelector<HTMLElement>(".alerts-control")!;
+  const alertsToggle = alertsElement.querySelector<HTMLButtonElement>(".alerts-toggle")!;
+  const alertsList = alertsElement.querySelector<HTMLElement>(".alerts-list")!;
+  alertsToggle.addEventListener("click", () => {
+    const open = alertsList.hidden;
+    alertsList.hidden = !open;
+    alertsToggle.setAttribute("aria-expanded", String(open));
+  });
+
+  function confidenceColor(value: unknown): string {
+    return CONFIDENCE_COLORS[String(value)] ?? NO_CATEGORY_COLOR;
+  }
+
+  function updateAlerts(collection: FireCollection | null): void {
+    const active = collection?.features.filter((feature) => feature.properties?.status === "active") ?? [];
+    alertsToggle.querySelector<HTMLElement>(".alerts-count")!.textContent = String(active.length);
+    alertsToggle.classList.toggle("has-alerts", active.length > 0);
+    alertsList.innerHTML = active.length
+      ? active.map((feature, index) => {
+          const p = feature.properties ?? {};
+          const color = confidenceColor(p.confidence);
+          return `<button type="button" class="alert-item" data-index="${index}">
+            <i style="--alert-color:${color}" aria-hidden="true"></i>
+            <span><b>${escapeHtml(p.event_id)}</b><small>Confianza: ${escapeHtml(p.confidence)}</small></span>
+          </button>`;
+        }).join("")
+      : `<div class="alerts-empty">No hay zonas activas</div>`;
+    alertsList.querySelectorAll<HTMLButtonElement>(".alert-item").forEach((button) => {
+      button.addEventListener("click", () => {
+        const feature = active[Number(button.dataset.index)];
+        const geometry = feature.geometry;
+        if (geometry.type === "Point") map.flyTo([geometry.coordinates[1], geometry.coordinates[0]], 10);
+      });
+    });
+  }
+
   function describe(label: string, collection: FireCollection | null): string | null {
     if (!collection) return null;
     const shown = formatNumber(collection.count);
@@ -192,19 +239,44 @@ if (mapContainer) {
 
   function drawEvents(collection: FireCollection | null): void {
     eventsLayer.clearLayers();
+    updateAlerts(collection);
     if (!collection) return;
     eventsLayer.addLayer(
       L.geoJSON(collection as GeoJSON.FeatureCollection, {
         filter: (feature) => !hiddenKeys.has(`status:${feature.properties?.status}`),
-        pointToLayer: (feature, latlng) =>
-          L.circleMarker(latlng, {
-            radius: Math.min(14, 6 + Math.sqrt(Number(feature.properties?.frp_max_mw ?? 0)) / 2),
+        pointToLayer: (feature, latlng) => {
+          const properties = feature.properties ?? {};
+          if (properties.status === "active") {
+            const color = confidenceColor(properties.confidence);
+            return L.marker(latlng, {
+              icon: L.divIcon({
+                className: "active-zone-marker",
+                html: `<span class="active-zone-pulse" style="--alert-color:${color}"></span>
+                  <span class="active-zone-icon" style="--alert-color:${color}" aria-label="Zona activa">!</span>`,
+                iconSize: [44, 44],
+                iconAnchor: [22, 22],
+              }),
+              zIndexOffset: 500,
+            });
+          }
+          return L.circleMarker(latlng, {
+            radius: Math.min(14, 6 + Math.sqrt(Number(properties.frp_max_mw ?? 0)) / 2),
             weight: 2,
-            color: EVENT_COLORS[String(feature.properties?.status)] ?? NO_CATEGORY_COLOR,
-            fillColor: EVENT_COLORS[String(feature.properties?.status)] ?? NO_CATEGORY_COLOR,
+            color: EVENT_COLORS[String(properties.status)] ?? NO_CATEGORY_COLOR,
+            fillColor: EVENT_COLORS[String(properties.status)] ?? NO_CATEGORY_COLOR,
             fillOpacity: 0.25,
-          }),
-        onEachFeature: (feature, layer) => layer.bindPopup(eventPopup(feature.properties)),
+          });
+        },
+        onEachFeature: (feature, layer) => {
+          const properties = feature.properties ?? {};
+          const point = feature.geometry.type === "Point" ? feature.geometry.coordinates : null;
+          const googleMapsButton = properties.status === "active" && point
+            ? `<br><a class="google-maps-report" target="_blank" rel="noopener noreferrer"
+                href="https://www.google.com/maps/search/?api=1&query=${point[1]},${point[0]}">
+                Reportar en Google Maps</a>`
+            : "";
+          layer.bindPopup(`${eventPopup(properties)}${googleMapsButton}`);
+        },
       }),
     );
   }
@@ -530,7 +602,7 @@ if (mapContainer) {
   // --- Coordenadas del cursor (arriba a la derecha) -----------------------------------------
   initActivityPanel(map);
 
-  const coordinates = new L.Control({ position: "topright" });
+  const coordinates = new L.Control({ position: "bottomleft" });
   coordinates.onAdd = () => {
     const element = L.DomUtil.create("div", "coordinates-control");
     element.innerHTML = "Mueve el cursor sobre el mapa";
