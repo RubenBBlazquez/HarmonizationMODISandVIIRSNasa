@@ -247,8 +247,7 @@ export function detectionPopup(properties: Properties): string {
     Confianza: ${confidenceLabel(properties.confidence)} ·
     ${properties.daynight === "D" ? "día" : "noche"}<br>
     Biomasa: ${escapeHtml(properties.biomass_kg_s)} kg/s<br>
-    Píxel: ${escapeHtml(properties.scan_km)} × ${escapeHtml(properties.track_km)} km
-    (${escapeHtml(properties.pixel_area_km2)} km²)<br>
+    Área: ${escapeHtml(properties.area_width_km)} × ${escapeHtml(properties.area_height_km)} km<br>
     Cobertura del suelo: ${escapeHtml(properties.land_cover)}`;
 }
 
@@ -298,8 +297,10 @@ export function enableTooltipPinning(map: L.Map): void {
     if (event.key === "Escape") {
       pinnedTooltips.splice(0).forEach((tooltip) => tooltip.remove());
     } else if (event.key === "Shift" && !event.repeat && hoveredTooltip) {
+      const latLng = hoveredTooltip.getLatLng();
+      if (!latLng) return;
       const pinned = L.tooltip({ permanent: true, direction: "top", interactive: false })
-        .setLatLng(hoveredTooltip.getLatLng())
+        .setLatLng(latLng)
         .setContent(hoveredTooltip.getContent() as string);
       pinned.addTo(map);
       pinnedTooltips.push(pinned);

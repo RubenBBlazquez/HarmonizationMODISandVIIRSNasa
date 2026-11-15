@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from typing import Annotated, Any, Literal
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
 from backend.api import queries
+from backend.api.cache import TTLCache
 from backend.api.db import get_connection
 
 GEOJSON_MEDIA_TYPE = "application/geo+json"
+YEARLY_CACHE_TTL_S = 3600  # los datos solo cambian cuando corre el ETL
+_yearly_cache = TTLCache(YEARLY_CACHE_TTL_S)
 
 router = APIRouter(prefix="/api", tags=["fires"])
 
@@ -32,6 +36,15 @@ def get_filters(
         Query(description="Solo detecciones."),
     ] = None,
     limit: Annotated[int, Query(ge=1, le=queries.MAX_LIMIT)] = queries.DEFAULT_LIMIT,
+    all_years: Annotated[
+        bool,
+        Query(
+            description=(
+                "Devuelve las mismas fechas del rango start-end en todos los años "
+                "(necesita start y end)."
+            )
+        ),
+    ] = False,
 ) -> queries.Filters:
     """Valida y agrupa los filtros comunes (422 si el recuadro o las fechas no son válidos)."""
     parsed_bbox = None
@@ -44,7 +57,14 @@ def get_filters(
     if start is not None and end is not None and start > end:
         raise HTTPException(status_code=422, detail="start no puede ser posterior a end")
 
-    return queries.Filters(parsed_bbox, start, end, source, frp_category, limit)
+    window = None
+    if all_years:
+        if start is None or end is None:
+            raise HTTPException(status_code=422, detail="all_years necesita start y end")
+
+        window = queries.day_window(start, end)
+
+    return queries.Filters(parsed_bbox, start, end, source, frp_category, limit, window)
 
 
 FiltersDep = Annotated[queries.Filters, Depends(get_filters)]
@@ -88,8 +108,9 @@ def detections(
     """
     Detecciones **válidas** (``is_valid = true``) como GeoJSON.
 
-    ``geometry=point`` devuelve el punto; ``geometry=pixel``, el área del píxel (``scan`` ×
-    ``track`` km centrado en el punto, sin el buffer del pipeline).
+    ``geometry=point`` devuelve el punto; ``geometry=pixel``, el área del píxel (un
+    rectángulo ``area_width_km`` × ``area_height_km`` centrado en el punto, sin el buffer del
+    pipeline).
 
     Devuelve ``count`` (elementos devueltos), ``total`` (los que cumplen el filtro) y
     ``truncated`` (si ``total`` supera ``limit``).
@@ -113,7 +134,7 @@ def history(
     ] = queries.DEFAULT_HISTORY_LIMIT,
 ) -> dict[str, Any]:
     """
-    Incendios "similares" de una zona: los de la **misma zona** y las **mismas fechas del año**
+    Incendios de años anteriores de una zona: los de la **misma zona** y las **mismas fechas del año**
     en los ``years`` años anteriores.
 
     Devuelve un resumen por periodo (el elegido, marcado con ``is_reference``, y cada año
@@ -128,6 +149,33 @@ def history(
     return queries.fetch_history(connection, parsed_bbox, periods, limit)
 
 
+@router.get("/yearly")
+def yearly(
+    filters: FiltersDep,
+    connection: Connection,
+    response: Response,
+) -> dict[str, Any]:
+    """
+    Totales por año de las mismas fechas del rango ``start``-``end`` (``all_years`` implícito).
+
+    Pensado para contadores globales: sin ``bbox`` cuenta todo el mapa. Devuelve ``window`` y,
+    para cada año (del más reciente al más antiguo), ``events``, ``detections`` y
+    ``frp_max_mw``. El resultado se cachea ``YEARLY_CACHE_TTL_S`` segundos por ventana de días,
+    zona y fuente (no por año, así que 12-18 ago de 2024 y de 2025 comparten entrada).
+    """
+    if filters.start is None or filters.end is None:
+        raise HTTPException(status_code=422, detail="yearly necesita start y end")
+
+    window = queries.day_window(filters.start, filters.end)
+    key = (window, filters.bbox, filters.source)
+    response.headers["Cache-Control"] = f"public, max-age={YEARLY_CACHE_TTL_S}"
+
+    return _yearly_cache.get_or_compute(
+        key,
+        lambda: queries.fetch_yearly(connection, replace(filters, day_window=window)),
+    )
+
+
 @router.get("/events/{event_id}")
 def event_detail(
     event_id: str,
@@ -137,8 +185,8 @@ def event_detail(
     ] = queries.DEFAULT_EVENT_DETECTIONS,
 ) -> dict[str, Any]:
     """
-    Un incendio: su envolvente (``event``) y sus detecciones dibujadas como el píxel ``scan`` ×
-    ``track`` (``detections``). 404 si no existe.
+    Un incendio: su envolvente (``event``) y sus detecciones dibujadas como el píxel de área
+    ``area_width_km`` × ``area_height_km`` (``detections``). 404 si no existe.
     """
     detail = queries.fetch_event_detail(connection, event_id, limit)
     if detail is None:

@@ -222,7 +222,7 @@ Se abre en el navegador (`http://localhost:5173`) y ocupa toda la pantalla. Perm
 - **Seleccionar una zona**: se arrastra un recuadro sobre el mapa y aparece un menú con:
   - *Incendios en esta zona*: los que tienen al menos una detección dentro del recuadro y de las
     fechas elegidas.
-  - *Incendios similares en los últimos 10 años*: los que hubo **en esa misma zona y en esas
+  - *Incendios de los últimos 10 años*: los que hubo **en esa misma zona y en esas
     mismas fechas del año** en cada uno de los diez años anteriores (incluidos los años sin
     ninguno). Sirve para responder a "¿esto es normal aquí en esta época?".
   - *Acercar a la zona* y *Quitar selección*.

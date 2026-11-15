@@ -33,7 +33,7 @@ const SPAIN_ZOOM = 6;
 const ITEM_LIMIT = 5000;
 const REFRESH_DELAY_MS = 300;
 const DEFAULT_RANGE_DAYS = 365;
-// Desde este zoom las detecciones se dibujan como su píxel (scan × track); por debajo, como puntos
+// Desde este zoom las detecciones se dibujan como su píxel (su área: ancho × alto); por debajo, como puntos
 // (a zoom bajo un píxel de 0,4-1 km mide menos de 1 px y no se vería).
 const PIXEL_MIN_ZOOM = 10;
 // Selección de zona con el ratón y búsquedas sobre ese recuadro.
@@ -53,10 +53,26 @@ const LEGEND_ITEMS = [
   { key: "status:closed", label: "Evento cerrado", color: EVENT_COLORS.closed },
 ];
 
+// Con "Comparar con todos los años" el contorno de cada elemento indica su año.
+const YEAR_COLORS = [
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#8c564b",
+  "#17becf", "#e377c2", "#bcbd22", "#7f7f7f", "#d62728",
+];
+const yearColor = (year: number): string => YEAR_COLORS[year % YEAR_COLORS.length];
+const featureYear = (feature: GeoJSON.Feature | undefined, field: string): number =>
+  Number(String(feature?.properties?.[field] ?? "").slice(0, 4));
+
 const SELECT_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/>
   <path d="M12 8v8M8 12h8"/></svg>`;
+
+interface YearlyRow {
+  year: number;
+  events: number;
+  detections: number;
+  frp_max_mw: number | null;
+}
 
 interface Summary {
   valid_detections: number;
@@ -110,6 +126,16 @@ if (mapContainer) {
       <label><span><input type="checkbox" id="layer-events" checked> Eventos</span></label>
       <label><span><input type="checkbox" id="layer-detections" checked> Detecciones válidas</span></label>
       <div class="date-field"><span>Fechas</span><div id="date-range"></div></div>
+      <label class="months-option" for="all-years-months"
+        title="Muestra el mismo rango de días (por ejemplo 12-18 ago) en cada año disponible">
+        <input type="checkbox" id="all-years-months">
+        <span><b>Comparar con todos los años</b>
+          <small id="all-years-hint">Mismas fechas del rango en cada año</small></span>
+      </label>
+      <div class="years-legend" id="years-legend" hidden>
+        <div class="years-title" title="Cada año se dibuja con el contorno de su color. Pulsa un año para ocultarlo o mostrarlo. Los totales son de todo el mapa y no cambian al moverlo. Evento = incendio (grupo de detecciones); detección = punto detectado por el satélite. El relleno indica la intensidad (FRP).">Color del contorno por año <span aria-hidden="true">ⓘ</span></div>
+        <div class="years-chips"></div>
+      </div>
       <button type="button" class="play-btn" id="play-btn"
         title="Muestra día a día cómo avanzan los incendios del rango elegido"></button>
       <button type="button" class="select-area" id="select-area"
@@ -122,10 +148,16 @@ if (mapContainer) {
   filters.addTo(map);
 
   // Lo que se oculta desde la leyenda se filtra en el cliente, sin volver a pedir datos.
-  const hiddenKeys = new Set<string>();
+  // Por defecto los eventos cerrados están ocultos: se activan desde la leyenda.
+  const hiddenKeys = new Set<string>(["status:closed"]);
   let lastEvents: FireCollection | null = null;
   let lastDetections: FireCollection | null = null;
   let lastAsPixels = false;
+  // Totales por año de todo el mapa: fijos, solo cambian con el rango de fechas (no al mover el mapa).
+  let lastYearly: YearlyRow[] = [];
+  let lastYearlyKey = "";
+  const seenYears = new Set<number>(); // años ya listados: los nuevos nacen desactivados
+  let lastAllYears = false; // la última carga fue de las mismas fechas en todos los años
 
   function syncLegend(element: HTMLElement): void {
     element.querySelectorAll<HTMLButtonElement>("button.legend-item").forEach((button) => {
@@ -146,13 +178,14 @@ if (mapContainer) {
     element.innerHTML = `${items.join("")}
       <button type="button" class="legend-reset" data-reset hidden>Mostrar todo</button>
       <div class="legend-note">Pulsa un elemento para ocultarlo o mostrarlo.<br>
-        Zoom ≥ ${PIXEL_MIN_ZOOM}: área del píxel (scan × track)</div>`;
+        Zoom ≥ ${PIXEL_MIN_ZOOM}: área de la detección (ancho × alto, km)</div>`;
     L.DomEvent.disableClickPropagation(element); // los clics no llegan al mapa
     element.addEventListener("click", (event) => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button");
       if (!button) return;
       if (button.dataset.reset !== undefined) {
         hiddenKeys.clear();
+        updateYearsLegend(); // los chips de años reflejan que vuelven a estar todos activos
       } else if (button.dataset.key) {
         const key = button.dataset.key;
         if (hiddenKeys.has(key)) hiddenKeys.delete(key);
@@ -172,7 +205,55 @@ if (mapContainer) {
   const picker = new DateRangePicker(document.querySelector<HTMLElement>("#date-range")!, (range) => {
     stopPlayback();
     saveRange(range);
+    updateMonthsHint();
     scheduleRefresh();
+  });
+  // Opción "todos los años": refresh() envía all_years=true y la API devuelve las mismas fechas de cada año.
+  const allYearsToggle = document.querySelector<HTMLInputElement>("#all-years-months")!;
+  const allYearsHint = document.querySelector<HTMLElement>("#all-years-hint")!;
+  function updateMonthsHint(): void {
+    const start = picker.value?.start;
+    const end = picker.value?.end;
+    allYearsHint.textContent =
+      start && end
+        ? `Mismas fechas (${formatDayMonth(start)} → ${formatDayMonth(end)}) en cada año`
+        : "Mismas fechas del rango en cada año";
+  }
+  updateMonthsHint();
+  // Leyenda de años (en el panel, no en el mapa): un chip por año cargado; pulsar lo oculta.
+  const yearsLegend = document.querySelector<HTMLElement>("#years-legend")!;
+  function updateYearsLegend(): void {
+    yearsLegend.hidden = !lastAllYears || lastYearly.length === 0;
+    if (yearsLegend.hidden) return;
+    // Por defecto solo está activo el primer año (el más reciente); el resto se activa a mano.
+    // Los años que aparecen más tarde (al mover el mapa) también nacen desactivados.
+    for (const { year } of lastYearly) {
+      if (!seenYears.has(year) && seenYears.size > 0) hiddenKeys.add(`year:${year}`);
+      seenYears.add(year);
+    }
+    const rows = lastYearly.map(
+      (row) => `<button type="button" class="year-chip" data-year="${row.year}"
+        aria-pressed="${!hiddenKeys.has(`year:${row.year}`)}"
+        title="${row.year}: ${formatNumber(row.events)} incendios (eventos) y ${formatNumber(row.detections)} detecciones de satélite en todo el mapa">
+        <i style="--c:${yearColor(row.year)}"></i><b>${row.year}</b>
+        <span>${formatNumber(row.events)} eventos · ${formatNumber(row.detections)} detecciones</span></button>`,
+    );
+    yearsLegend.querySelector<HTMLElement>(".years-chips")!.innerHTML = rows.join("");
+  }
+  yearsLegend.addEventListener("click", (event) => {
+    const chip = (event.target as HTMLElement).closest<HTMLButtonElement>("button.year-chip");
+    if (!chip) return;
+    const key = `year:${chip.dataset.year}`;
+    if (hiddenKeys.has(key)) hiddenKeys.delete(key);
+    else hiddenKeys.add(key);
+    chip.setAttribute("aria-pressed", String(!hiddenKeys.has(key)));
+    redraw();
+  });
+  allYearsToggle.addEventListener("change", () => {
+    // Al salir del modo se olvida la selección de años; al entrar, empieza solo con el primero.
+    seenYears.clear();
+    for (const key of [...hiddenKeys]) if (key.startsWith("year:")) hiddenKeys.delete(key);
+    scheduleRefresh(); // recarga con o sin all_years y muestra el spinner de carga
   });
   const rangeStart = (): string => picker.value?.start ?? "";
   const rangeEnd = (): string => picker.value?.end ?? "";
@@ -239,19 +320,27 @@ if (mapContainer) {
     if (!collection) return;
     detectionsLayer.addLayer(
       L.geoJSON(sortByConfidence(collection as GeoJSON.FeatureCollection), {
-        filter: (feature) => !hiddenKeys.has(`frp:${feature.properties?.frp_category}`),
+        filter: (feature) =>
+          !hiddenKeys.has(`frp:${feature.properties?.frp_category}`) &&
+          !(lastAllYears && hiddenKeys.has(`year:${featureYear(feature, "acq_datetime")}`)),
         pointToLayer: (_feature, latlng) => L.circleMarker(latlng, { radius: 4 }),
         // `style` se aplica tanto a los polígonos (píxeles) como a los círculos (puntos).
-        style: (feature) =>
-          asPixels
-            ? pixelStyle(feature)
+        // En modo "todos los años" el contorno es del color del año.
+        style: (feature) => {
+          const outline = lastAllYears
+            ? { color: yearColor(featureYear(feature, "acq_datetime")), weight: 2, opacity: 1 }
+            : {};
+          return asPixels
+            ? { ...pixelStyle(feature), ...outline }
             : {
                 weight: 0.5,
                 color: "#ffffff",
                 fillColor:
                   FRP_COLORS[String(feature?.properties?.frp_category)] ?? NO_CATEGORY_COLOR,
                 fillOpacity: 0.8,
-              },
+                ...outline,
+              };
+        },
         onEachFeature: (feature, layer) => {
           layer.bindPopup(detectionPopup(feature.properties));
           // Al pasar el ratón por el área: sensor, satélite y fecha (día-mes-año), pegado al cursor.
@@ -267,7 +356,9 @@ if (mapContainer) {
     if (!collection) return;
     eventsLayer.addLayer(
       L.geoJSON(collection as GeoJSON.FeatureCollection, {
-        filter: (feature) => !hiddenKeys.has(`status:${feature.properties?.status}`),
+        filter: (feature) =>
+          !hiddenKeys.has(`status:${feature.properties?.status}`) &&
+          !(lastAllYears && hiddenKeys.has(`year:${featureYear(feature, "first_detection")}`)),
         pointToLayer: (feature, latlng) => {
           const properties = feature.properties ?? {};
           if (properties.status === "active") {
@@ -285,8 +376,10 @@ if (mapContainer) {
           }
           return L.circleMarker(latlng, {
             radius: Math.min(14, 6 + Math.sqrt(Number(properties.frp_max_mw ?? 0)) / 2),
-            weight: 2,
-            color: EVENT_COLORS[String(properties.status)] ?? NO_CATEGORY_COLOR,
+            weight: lastAllYears ? 3 : 2,
+            color: lastAllYears
+              ? yearColor(featureYear(feature, "first_detection"))
+              : (EVENT_COLORS[String(properties.status)] ?? NO_CATEGORY_COLOR),
             fillColor: EVENT_COLORS[String(properties.status)] ?? NO_CATEGORY_COLOR,
             fillOpacity: 0.25,
           });
@@ -324,6 +417,40 @@ if (mapContainer) {
   let controller: AbortController | null = null;
   let timer: number | undefined;
 
+  // Contadores por año: globales (todo el mapa), los cachea la API y solo se piden al cambiar el
+  // rango. Van aparte del mapa para que no lo retrasen.
+  let yearlyRequested = "";
+  async function loadYearly(start: string, end: string): Promise<void> {
+    const key = `${start}|${end}`;
+    if (key === lastYearlyKey || key === yearlyRequested) return;
+    yearlyRequested = key;
+    try {
+      const data = await fetchJson<{ years: YearlyRow[] }>("/yearly", { start, end });
+      if (yearlyRequested !== key) return; // llegó tarde: ya se pidió otro rango
+      lastYearly = data.years;
+      lastYearlyKey = key;
+      if (lastAllYears) {
+        updateYearsLegend();
+        updateYearsStatus(key);
+        redraw();
+      }
+    } catch {
+      yearlyRequested = ""; // se reintentará en la siguiente carga
+    }
+  }
+
+  function updateYearsStatus(key: string): void {
+    if (lastYearlyKey !== key) {
+      statusElement.textContent = "Cargando los contadores por año…";
+      return;
+    }
+    const total = (field: "events" | "detections"): number =>
+      lastYearly.reduce((sum, row) => sum + row[field], 0);
+    statusElement.textContent =
+      `${lastYearly.length} años · ${formatNumber(total("events"))} eventos · ` +
+      `${formatNumber(total("detections"))} detecciones (detalle por año en la leyenda)`;
+  }
+
   async function refresh(): Promise<void> {
     controller?.abort();
     controller = new AbortController();
@@ -334,12 +461,20 @@ if (mapContainer) {
     };
     if (rangeStart()) params.start = rangeStart();
     if (rangeEnd()) params.end = rangeEnd();
+    // Mismas fechas del rango en todos los años: lo resuelve la API (necesita start y end).
+    if (allYearsToggle.checked && rangeStart() && rangeEnd()) params.all_years = "true";
 
     const asPixels = map.getZoom() >= PIXEL_MIN_ZOOM;
     const detectionParams = { ...params, geometry: asPixels ? "pixel" : "point" };
 
-    statusElement.textContent = "Cargando…";
+    statusElement.textContent = allYearsToggle.checked
+      ? "Cargando las mismas fechas de todos los años…"
+      : "Cargando…";
+    statusElement.classList.add("loading");
     try {
+      const allYears = params.all_years === "true";
+      const yearlyKey = `${params.start}|${params.end}`;
+      if (allYears) void loadYearly(params.start, params.end); // contadores: no bloquean el mapa
       const [events, detections] = await Promise.all([
         eventsToggle.checked ? fetchJson<FireCollection>("/events", params, signal) : null,
         detectionsToggle.checked
@@ -347,7 +482,13 @@ if (mapContainer) {
           : null,
       ]);
       [lastEvents, lastDetections, lastAsPixels] = [events, detections, asPixels];
+      lastAllYears = params.all_years === "true";
+      updateYearsLegend();
       redraw();
+      if (allYears) {
+        updateYearsStatus(yearlyKey);
+        return;
+      }
       const parts = [describe("Eventos", events), describe("Detecciones", detections)];
       statusElement.textContent = parts.filter(Boolean).join(" · ") || "Sin capas activas";
       if (hiddenKeys.size > 0) statusElement.textContent += " · hay elementos ocultos (leyenda)";
@@ -357,6 +498,9 @@ if (mapContainer) {
     } catch (error) {
       if ((error as Error).name === "AbortError") return;
       statusElement.textContent = "No se pudieron cargar los datos. ¿Está la API en marcha?";
+    } finally {
+      // Si la petición fue cancelada por otra más nueva, el spinner sigue hasta que acabe esa.
+      if (!signal.aborted) statusElement.classList.remove("loading");
     }
   }
 
@@ -453,10 +597,10 @@ if (mapContainer) {
   let anchor: L.LatLng | null = null;
   let selection: L.Rectangle | null = null;
 
-  // "Similares": misma zona y mismas fechas del año en los años anteriores, en un popup grande
+  // "Años anteriores": misma zona y mismas fechas del año en los años anteriores, en un popup grande
   // con el resumen por años y el mapa de cada incendio (un clic en un mapa lo amplía).
   async function showHistory(bounds: L.LatLngBounds): Promise<void> {
-    const title = "Incendios similares en años anteriores";
+    const title = "Incendios de años anteriores";
     const modal = openModal(title);
     if (!rangeStart() || !rangeEnd()) {
       modal.body.innerHTML =
@@ -502,7 +646,10 @@ if (mapContainer) {
       <b>Zona seleccionada</b>
       <small>Lat ${bounds.getSouth().toFixed(3)} a ${bounds.getNorth().toFixed(3)} ·
         Lon ${bounds.getWest().toFixed(3)} a ${bounds.getEast().toFixed(3)}</small>
-      <button type="button" data-action="history">Incendios similares en los últimos ${HISTORY_YEARS} años</button>
+      <button type="button" data-action="history">Incendios de los últimos ${HISTORY_YEARS} años</button>
+      <button type="button" data-action="predict" disabled
+        title="Predicción con series temporales: ¿habrá fuego hoy o en X tiempo en esta zona?">
+        Predecir fuego en la zona (series temporales) <em>· Próximamente</em></button>
       <button type="button" data-action="clear">Quitar selección</button>`;
     element.querySelectorAll<HTMLButtonElement>("button[data-action]").forEach((button) =>
       button.addEventListener("click", () => {

@@ -14,7 +14,7 @@ from fire_etl.outputs import read_previous_state, write_tables
 from fire_etl.pipeline import process_detections
 from tests.conftest import MODIS_SAMPLE, VIIRS_SAMPLE, ingest_rows, modis_row, viirs_row
 
-THREE_KM_EAST = 3000.0
+TWO_KM_EAST = 2000.0
 
 
 def run_rows(config: PipelineConfig, output_dir=None, modis=None, viirs=None):
@@ -117,15 +117,15 @@ def test_two_events_merge_into_oldest_and_merge_is_recorded(config, tmp_path):
         config,
         tmp_path,
         viirs=[
-            viirs_row("2026-09-14 10:00", east_m=-THREE_KM_EAST / 2),
-            viirs_row("2026-09-14 12:00", east_m=THREE_KM_EAST / 2),
+            viirs_row("2026-09-14 10:00", east_m=-TWO_KM_EAST / 2),
+            viirs_row("2026-09-14 12:00", east_m=TWO_KM_EAST / 2),
         ],
     )
     first_events = first.events.sort_values("first_detection")
     oldest_id, newest_id = first_events["event_id"].tolist()
 
-    # Una detección MODIS del día siguiente (3 km x 1 km + buffer) toca ambos eventos.
-    second = run_rows(config, tmp_path, modis=[modis_row("2026-09-15 10:30", scan=3.0)])
+    # Una detección MODIS del día siguiente (1 km x 1 km + buffer) toca ambos eventos.
+    second = run_rows(config, tmp_path, modis=[modis_row("2026-09-15 10:30")])
     event = second.events.iloc[0]
 
     assert len(first.events) == 2

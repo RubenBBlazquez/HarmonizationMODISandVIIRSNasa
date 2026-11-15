@@ -57,7 +57,7 @@ async function load(): Promise<void> {
 
   try {
     if (mode === "history") {
-      titleElement.textContent = "Incendios similares en años anteriores";
+      titleElement.textContent = "Incendios de años anteriores";
       criteriaElement.textContent = `${zoneText()} · mismas fechas (${formatDayMonth(start)} → ${formatDayMonth(end)}) en los ${years} años anteriores a ${start.slice(0, 4)}.`;
       const data = await fetchJson<HistoryResponse>("/history", {
         bbox,

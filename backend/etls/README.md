@@ -68,8 +68,8 @@ pre-commit run --all-files     # desde cualquier carpeta del repo; solo revisa b
 
 1. **Ingesta** (`ingest.py`). El sensor se detecta por las columnas (`brightness` → MODIS,
    `bright_ti4` → VIIRS), no por la extensión: FIRMS publica los NRT como `.txt`. Esquema común:
-   `detection_id, source, satellite, acq_datetime (UTC tz-aware), acq_date, lat, lon, scan,
-   track, frp, daynight, confidence_raw, confidence_norm, brightness, brightness_2, version`.
+   `detection_id, source, satellite, acq_datetime (UTC tz-aware), acq_date, lat, lon,
+   area_width_km, area_height_km, frp, daynight, confidence_raw, confidence_norm, brightness, brightness_2, version`.
    `acq_time` admite `HH:MM` (NRT) y `HHMM` entero (API, p. ej. `304`). Las filas inválidas se
    descartan con su motivo (`ingest_discards.csv` y log).
 2. **Confianza normalizada.** MODIS: `0-29 low`, `30-79 nominal`, `80-100 high` (umbrales en el
@@ -78,8 +78,11 @@ pre-commit run --all-files     # desde cualquier carpeta del repo; solo revisa b
 3. **`detection_id`** = SHA-1 de `source|satellite|acq_datetime|lat|lon`, con coordenadas
    redondeadas a 5 decimales. Reingerir el mismo fichero no genera duplicados.
 4. **Geometrías** (`geometry.py`). Punto en EPSG:4326 y cálculos en el CRS métrico (EPSG:25830 por
-   defecto; `auto` = zona UTM del AOI). El footprint es un rectángulo `scan` (X) × `track` (Y) km
-   ampliado con el buffer (400 m) en esquinas rectas, así que mide `scan·1000 + 2·buffer` m de
+   defecto; `auto` = zona UTM del AOI). cada detección guarda `area_width_km` y
+   `area_height_km` (km, genéricos: no dependen del sensor). Hoy se rellenan con el tamaño
+   nominal del píxel (`geometry.pixel_size_km`: MODIS 1 km, VIIRS 0,375 km); no se usan `scan` ni
+   `track` de FIRMS. El footprint es un rectángulo `area_width_km` (X) × `area_height_km` (Y)
+   ampliado con el buffer (400 m) en esquinas rectas, así que mide `ancho·1000 + 2·buffer` m de
    ancho.
 5. **Observaciones** (`fusion.py`). Las ventanas pueden ser `day_utc`, `hours_12` o
    `date_daynight`. Un único `sjoin(predicate="intersects")` del conjunto consigo mismo, del que se
@@ -159,6 +162,10 @@ Propiedades de cada evento: `event_id`, `status` (`active`/`closed`), `first_det
   umbrales están en `validation.frp_thresholds_mw` de la configuración YAML y se desactivan con
   `validation.apply_frp_thresholds: false`. El número de marcadas queda en
   `run_parameters.json` como `skipped_detections`.
+  **Excepción en bosque:** si la detección cae en bosque (`is_forest`, SIGPAC), se mantiene válida
+  con `frp_category = "low"` aunque su FRP sea bajo, porque el riesgo es alto y debe poder alertar
+  (la confianza baja tampoco la descarta). En agricultura se sigue descartando. Se desactiva con
+  `validation.keep_forest_below_frp: false` y necesita la cobertura del suelo activada.
 - Observaciones `low` aisladas (un solo sensor y confianza baja).
 - Detecciones fuera de España.
 

@@ -19,15 +19,13 @@ import pandas as pd
 
 from fire_etl.confidence import normalize_modis_confidence, normalize_viirs_confidence
 from fire_etl.config import ExclusionZone, PipelineConfig, ValidationConfig
-from fire_etl.frp_classification import CATEGORY_DISCARDED, classify_frp
+from fire_etl.frp_classification import CATEGORY_DISCARDED, CATEGORY_LOW, classify_frp
 
 LOGGER = logging.getLogger(__name__)
 
 REQUIRED_COLUMNS = (
     "latitude",
     "longitude",
-    "scan",
-    "track",
     "acq_date",
     "acq_time",
     "satellite",
@@ -50,8 +48,8 @@ DETECTION_COLUMNS = (
     "acq_date",
     "lat",
     "lon",
-    "scan",
-    "track",
+    "area_width_km",
+    "area_height_km",
     "frp",
     "biomass_kg_s",
     "frp_class",
@@ -240,8 +238,12 @@ def normalize_firms(raw: pd.DataFrame, config: PipelineConfig) -> pd.DataFrame:
     normalized["acq_date"] = normalized["acq_datetime"].dt.date
     normalized["lat"] = pd.to_numeric(raw["latitude"], errors="coerce")
     normalized["lon"] = pd.to_numeric(raw["longitude"], errors="coerce")
-    normalized["scan"] = pd.to_numeric(raw["scan"], errors="coerce")
-    normalized["track"] = pd.to_numeric(raw["track"], errors="coerce")
+    # El área de la detección se guarda como ancho y alto en km, genéricos (sin depender del
+    # sensor). Hoy salen del tamaño nominal de píxel de cada sensor (``geometry.pixel_size_km``);
+    # no se usan ``scan`` y ``track`` de FIRMS.
+    pixel_size_km = config.geometry.pixel_size_km[source.value]
+    normalized["area_width_km"] = pixel_size_km
+    normalized["area_height_km"] = pixel_size_km
     normalized["frp"] = pd.to_numeric(raw["frp"], errors="coerce")
     normalized["biomass_kg_s"] = normalized["frp"] * config.biomass.coefficient_kg_per_mj
     normalized["daynight"] = raw["daynight"].astype("string").str.strip().str.upper()
@@ -332,8 +334,6 @@ def invalid_reasons(detections: pd.DataFrame, rules: ValidationConfig) -> pd.Ser
         "invalid_datetime": detections["acq_datetime"].isna(),
         "invalid_lat": ~detections["lat"].between(*rules.lat_range),
         "invalid_lon": ~detections["lon"].between(*rules.lon_range),
-        "invalid_scan": ~detections["scan"].between(*rules.scan_km_range),
-        "invalid_track": ~detections["track"].between(*rules.track_km_range),
         "invalid_frp": ~(detections["frp"] >= rules.frp_min),
         "invalid_daynight": ~detections["daynight"].isin(rules.allowed_daynight).fillna(False),
         "invalid_confidence": detections["confidence_norm"].isna(),
@@ -344,6 +344,46 @@ def invalid_reasons(detections: pd.DataFrame, rules: ValidationConfig) -> pd.Ser
     reasons = pd.Series(reasons, index=detections.index, dtype="object")
 
     return reasons.where(reasons != "", None)
+
+
+def keep_forest_detections(
+    detections: pd.DataFrame, rules: ValidationConfig
+) -> tuple[pd.DataFrame, int]:
+    """
+    Rescata las detecciones en bosque que se marcaron por FRP por debajo del mínimo.
+
+    En bosque el riesgo es alto aunque el foco sea pequeño: pasan a ser válidas con categoría
+    ``low``. Las de agricultura u otros usos siguen marcadas. Necesita ``is_forest`` (SIGPAC); sin
+    esa columna no hace nada.
+
+    Parameters
+    ----------
+    detections : pd.DataFrame
+        Detecciones con ``is_valid``, ``skip_reason`` y, si hay cobertura del suelo, ``is_forest``.
+    rules : ValidationConfig
+        Reglas de validación (``keep_forest_below_frp``).
+
+    Returns
+    -------
+    tuple[pd.DataFrame, int]
+        Detecciones actualizadas (copia) y cuántas se rescataron.
+    """
+    if not rules.keep_forest_below_frp or "is_forest" not in detections:
+        return detections, 0
+
+    forest = detections["is_forest"].fillna(False).astype(bool)
+    rescued = (detections["skip_reason"] == BELOW_FRP_REASON) & forest
+    count = int(rescued.sum())
+    if count == 0:
+        return detections, 0
+
+    updated = detections.copy()
+    updated.loc[rescued, "is_valid"] = True
+    updated.loc[rescued, "skip_reason"] = None
+    updated.loc[rescued, "frp_category"] = CATEGORY_LOW
+    updated.loc[rescued, "frp_class"] = 1
+
+    return updated, count
 
 
 def summarize_discards(sources: pd.Series, reasons: pd.Series) -> pd.DataFrame:

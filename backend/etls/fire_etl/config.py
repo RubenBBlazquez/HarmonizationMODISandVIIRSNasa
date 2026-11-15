@@ -140,8 +140,6 @@ class ValidationConfig:
 
     lat_range: tuple[float, float] = (-90.0, 90.0)
     lon_range: tuple[float, float] = (-180.0, 180.0)
-    scan_km_range: tuple[float, float] = (0.1, 10.0)
-    track_km_range: tuple[float, float] = (0.1, 10.0)
     frp_min: float = 0.0
     allowed_daynight: tuple[str, ...] = ("D", "N")
     # Marca como no válidas (``is_valid=False``, ``skip_reason="below_frp_threshold"``) las
@@ -149,6 +147,10 @@ class ValidationConfig:
     # en el YAML; los mínimos por defecto se ajustan a la sensibilidad publicada de píxeles
     # pequeños.
     apply_frp_thresholds: bool = True
+    # Un foco en bosque (``is_forest``) se mantiene válido aunque su FRP esté por debajo del mínimo
+    # (categoría "low"): el riesgo es alto y debe poder alertar. En agricultura se sigue
+    # descartando por FRP bajo. Necesita la cobertura del suelo (SIGPAC) activada.
+    keep_forest_below_frp: bool = True
     frp_thresholds_mw: dict[str, dict[str, float]] = field(
         default_factory=_default_frp_thresholds_mw
     )
@@ -268,15 +270,25 @@ class BiomassConfig:
 
 @dataclass(frozen=True)
 class GeometryConfig:
-    """CRS de cálculo/almacenamiento y buffer del footprint."""
+    """CRS de cálculo/almacenamiento, tamaño nominal del píxel y buffer del footprint."""
 
     metric_crs: str = "EPSG:25830"
     storage_crs: str = "EPSG:4326"
     footprint_buffer_m: float = 400.0
+    # Lado nominal del píxel de cada sensor, en km: MODIS 1 km, VIIRS 375 m. Con él se rellenan
+    # ``area_width_km`` y ``area_height_km`` de cada detección.
+    pixel_size_km: dict[str, float] = field(default_factory=lambda: {"MODIS": 1.0, "VIIRS": 0.375})
 
     def __post_init__(self) -> None:
         if self.footprint_buffer_m < 0:
             raise InvalidConfigError("geometry.footprint_buffer_m debe ser >= 0")
+
+        if set(self.pixel_size_km) != {"MODIS", "VIIRS"} or any(
+            size <= 0 for size in self.pixel_size_km.values()
+        ):
+            raise InvalidConfigError(
+                "geometry.pixel_size_km necesita MODIS y VIIRS con valores > 0 (km)"
+            )
 
 
 @dataclass(frozen=True)
