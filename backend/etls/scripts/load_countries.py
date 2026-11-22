@@ -3,9 +3,9 @@ Downloads the country borders (Natural Earth 1:50m) and loads them into ``fire.c
 
     python scripts/load_countries.py
 
-The zip is kept in ``data/natural_earth/`` (ignored by git) and is not downloaded again. The
-schema is applied first (idempotent), so it also works on a database created before the table
-existed. Reloading replaces every country.
+The zip is kept in ``data/natural_earth/`` (ignored by git) and is not downloaded again. Only the
+``fire.countries`` table is created if missing (not the whole schema), so it also works on a
+database with a reduced copy of the data, such as Railway. Reloading replaces every country.
 
 Optional:
     python scripts/load_countries.py path/to/ne_50m_admin_0_countries.zip   # local file
@@ -24,11 +24,12 @@ from fire_etl.load.countries import (
     NATURAL_EARTH_URL,
     CountriesLoadError,
     download_borders,
+    ensure_table,
     load_countries,
     prepare_rows,
     read_borders,
 )
-from fire_etl.load.postgres import apply_schema, describe_url
+from fire_etl.load.postgres import describe_url
 
 CONFIG_FILE = ETLS_DIR / "config" / "default.yaml"
 DOWNLOAD_FILE = ETLS_DIR / "data" / "natural_earth" / "ne_50m_admin_0_countries.zip"
@@ -59,7 +60,7 @@ def main() -> int:
 
     logging.info("Connecting to %s", describe_url(url))
     with psycopg.connect(url, connect_timeout=CONNECT_TIMEOUT_S) as connection:
-        apply_schema(connection)
+        ensure_table(connection)
         try:
             load_countries(connection, rows)
         except CountriesLoadError as error:
