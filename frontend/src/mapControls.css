@@ -1,0 +1,157 @@
+/* Controles del mapa (filtros, leyenda, alertas, actividad, selección), portados del mapa
+   Leaflet. Los importa globe.ts. */
+.activity-panel { position: fixed; z-index: 1000; top: 12px; right: 12px; bottom: 12px; width: 340px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; background: rgba(255,255,255,.96); border: 1px solid #dfe7dc; border-radius: 12px; box-shadow: 0 6px 24px #263c2933; transition: transform .25s ease, opacity .25s ease; }
+.activity-panel.collapsed { transform: translateX(calc(100% + 24px)); opacity: 0; pointer-events: none; }
+.activity-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 14px 14px 10px; border-bottom: 1px solid #edf0eb; }
+.activity-title { font: 700 15px Manrope, sans-serif; letter-spacing: -.3px; }
+.activity-sub { font-size: 11px; color: #6d7b72; margin-top: 2px; }
+.history-btn { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 10px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 8px; font-size: 11px; font-weight: 600; }
+.history-btn:hover { background: #e9f0e5; }
+.activity-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
+.activity-empty { padding: 14px; font-size: 12px; color: #6d7b72; }
+.activity-item { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 9px 10px; border-radius: 8px; font: inherit; color: inherit; }
+.activity-item:hover { background: #f0f4ee; }
+.activity-item-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #26362c; }
+.activity-item-meta { margin-top: 3px; font-size: 11px; color: #6d7b72; }
+.activity-badge { font-size: 10px; font-weight: 700; border-radius: 99px; padding: 2px 8px; background: #eef1ee; color: #5b6b62; }
+.activity-badge.active { background: #fbe9e6; color: #b03a28; }
+.activity-reopen { position: fixed; z-index: 1000; top: 16px; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 7px; border: 1px solid #dfe7dc; border-right: 0; border-radius: 12px 0 0 12px; background: rgba(255,255,255,.96); color: #2f5d43; box-shadow: -2px 2px 12px #263c2933; transition: background .15s ease, padding .15s ease; }
+.activity-reopen[hidden] { display: none; }
+.activity-reopen:hover, .activity-reopen:focus-visible { background: #2f5d43; color: #fff; padding-right: 11px; }
+.activity-reopen-label { writing-mode: vertical-rl; font-size: 11px; font-weight: 600; letter-spacing: .4px; white-space: nowrap; }
+.filters-control, .legend-control { background: rgba(255,255,255,.95); border: 1px solid #dfe7dc; border-radius: 8px; box-shadow: 0 2px 8px #263c291c; color: #405247; font-size: 11px; line-height: 1.5; padding: 10px 12px; }
+.filters-control { display: grid; gap: 6px; min-width: 190px; }
+.filters-control label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.date-field { display: grid; gap: 3px; }
+.play-btn { display: flex; align-items: center; justify-content: flex-start; text-align: left; gap: 6px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 6px; padding: 6px 9px; font-size: 11px; font-weight: 600; }
+.filters-control label.months-option { justify-content: flex-start; align-items: flex-start; gap: 8px; padding: 7px 8px; border: 1px solid #d9e2d6; border-radius: 6px; background: #f4f7f2; cursor: pointer; }
+.months-option:hover { background: #e9f0e5; }
+.months-option b { display: block; color: #2f4a39; font-size: 11px; }
+.months-option small { display: block; color: #6d7b72; font-size: 10px; margin-top: 2px; max-width: 190px; }
+.months-option input { margin-top: 2px; }
+.map-status.loading::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -2px; border: 2px solid #c9d8c2; border-top-color: #2f5d43; border-radius: 50%; animation: status-spin .8s linear infinite; }
+@keyframes status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .map-status.loading::before { animation-duration: 2.4s; } }
+.years-legend[hidden] { display: none; }
+.years-title { color: #5d6d63; font-size: 10px; cursor: help; margin-bottom: 4px; }
+.years-chips { display: grid; gap: 3px; width: 100%; max-height: 150px; overflow-y: auto; }
+.year-chip { display: flex; align-items: center; gap: 6px; border: 1px solid #d9e2d6; background: #fff; color: #2f4a39; border-radius: 6px; padding: 3px 7px; font-size: 10px; text-align: left; }
+.year-chip { flex-wrap: wrap; row-gap: 0; }
+.year-chip span { flex-basis: 100%; padding-left: 20px; color: #6d7b72; }
+.year-chip i { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--c); background: transparent; }
+.year-chip[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+.play-btn:hover { background: #e9f0e5; }
+.play-btn.playing { background: #2f5d43; border-color: #2f5d43; color: #fff; }
+.filters-control .map-status { color: #5d6d63; border-top: 1px solid #edf0eb; padding-top: 6px; max-width: 230px; }
+.legend-control i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+.legend-item { display: flex; align-items: center; width: 100%; border: 0; background: none; padding: 3px 4px; margin: 0; border-radius: 5px; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.legend-item:hover { background: #f0f4ee; }
+.legend-item i { flex: none; width: 11px; height: 11px; background: var(--c); border: 2px solid var(--c); box-sizing: border-box; }
+.legend-item[aria-pressed="false"] { color: #9aa49d; text-decoration: line-through; }
+.legend-item[aria-pressed="false"] i { background: transparent; }
+.legend-reset { margin-top: 4px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 99px; padding: 2px 8px; font-size: 10.5px; cursor: pointer; }
+.legend-reset[hidden] { display: none; }
+/* Selección de zona y resultados. */
+.select-area { display: flex; align-items: center; gap: 8px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 6px; padding: 6px 9px; font-size: 11px; font-weight: 600; text-align: left; }
+.select-area svg { flex: none; color: #e2603a; }
+.select-area span { flex: 1; }
+.select-area kbd { font: 600 9.5px 'DM Sans', sans-serif; border: 1px solid #c9d8c2; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: #fff; color: #5d6d63; }
+.select-area:hover { background: #e9f0e5; }
+.select-area.active { background: #e2603a; border-color: #e2603a; color: #fff; }
+.select-area.active svg { color: #fff; }
+.selection-menu { display: grid; gap: 6px; min-width: 220px; font-size: 12px; }
+.selection-menu small { color: #6d7b72; }
+.selection-menu button { border: 1px solid #e4e9e2; background: #fff; border-radius: 6px; padding: 6px 8px; text-align: left; color: #26362c; font-size: 12px; }
+.selection-menu button:disabled { opacity: .6; cursor: not-allowed; }
+.selection-menu button:disabled em { color: #6d7b72; font-style: normal; }
+.selection-menu button:hover:not(:disabled) { background: #f2f7ee; border-color: #c9d8c2; }
+.legend-control .legend-note { color: #6d7b72; border-top: 1px solid #edf0eb; margin-top: 6px; padding-top: 6px; max-width: 190px; }
+.legend-control div + div { margin-top: 3px; }
+.coordinates-control { background: rgba(255,255,255,.94); border: 1px solid #dfe7dc; border-radius: 8px; box-shadow: 0 2px 8px #263c291c; color: #405247; font-size: 11px; line-height: 1.55; padding: 9px 11px; min-width: 150px; }
+.alerts-control { min-width: 155px; }
+.alerts-toggle { display:flex; align-items:center; gap:6px; border:1px solid #dfe7dc; border-radius:8px; background:rgba(255,255,255,.96); color:#405247; padding:8px 10px; font-size:11px; box-shadow:0 2px 8px #263c291c; }
+.alerts-toggle.has-alerts { color:#8e1f2f; border-color:#e9c9c9; }
+.alerts-bell { color:var(--alert-color,#8a8f98); font-size:15px; }
+.alerts-count { min-width:18px; padding:1px 5px; border-radius:99px; background:#eef1ee; text-align:center; font-weight:700; }
+.alerts-toggle.has-alerts .alerts-count { background:#fbe9e6; }
+.alerts-list { margin-top:4px; padding:4px; max-height:240px; overflow:auto; background:rgba(255,255,255,.97); border:1px solid #dfe7dc; border-radius:8px; box-shadow:0 2px 8px #263c291c; }
+.alerts-list[hidden] { display:none; }
+.alert-item { display:flex; align-items:center; gap:8px; width:100%; border:0; background:none; text-align:left; padding:7px; border-radius:5px; color:#405247; font-size:10px; }
+.alert-item:hover { background:#f0f4ee; }
+.alert-item i { width:10px; height:10px; flex:none; border-radius:50%; background:var(--alert-color); box-shadow:0 0 0 3px color-mix(in srgb, var(--alert-color) 22%, transparent); }
+.alert-item b,.alert-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:120px; }
+.alert-item small { color:#6d7b72; margin-top:2px; }
+.alerts-empty { padding:8px; color:#6d7b72; font-size:10px; }
+.active-zone-marker { background: transparent; border: 0; }
+.active-zone-pulse { position:absolute; inset:1px; border:3px solid var(--alert-color); border-radius:50%; opacity:.85; animation:active-zone-pulse 1.6s ease-out infinite; box-shadow:0 0 0 4px #ffffffaa, 0 0 14px var(--alert-color); }
+.active-zone-icon { position:absolute; left:8px; top:6px; width:28px; height:28px; display:grid; place-items:center; background:var(--alert-color); color:#fff; clip-path:polygon(50% 0, 100% 100%, 0 100%); padding-top:6px; font:bold 18px Manrope,sans-serif; filter:drop-shadow(0 2px 3px #263c2988) drop-shadow(0 0 5px var(--alert-color)); }
+@keyframes active-zone-pulse { 0% { transform:scale(.45); opacity:.95; } 75%,100% { transform:scale(1.35); opacity:0; } }
+.google-maps-report { display:inline-block; margin-top:8px; border-radius:6px; background:#4285f4; color:#fff !important; padding:7px 10px; font-size:11px; font-weight:700; text-decoration:none; }
+.google-maps-report:hover { background:#2f6fd0; }
+
+/* --- Posición de los controles sobre el globo (en el mapa Leaflet los colocaba Leaflet) --- */
+.filters-control { position: relative; }
+.alerts-control { position: fixed; z-index: 3; top: 12px; left: 50%; transform: translateX(-50%); }
+.legend-control { position: fixed; z-index: 2; right: 12px; bottom: 28px; transition: right .25s ease; }
+.coordinates-control { position: fixed; z-index: 2; left: 12px; bottom: 28px; }
+.maplibregl-ctrl-top-right { transition: right .25s ease; }
+/* Los controles de la derecha se apartan del panel de actividad mientras está abierto. */
+body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-right { right: 364px; }
+@media (max-width: 650px) {
+  body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-right { right: 0; }
+  .activity-panel { width: calc(100vw - 24px); top: auto; height: 45vh; }
+  .coordinates-control { display: none; }
+}
+/* Recuadro de la selección de zona: el cursor en cruz mientras se elige. */
+.selecting canvas.maplibregl-canvas { cursor: crosshair !important; }
+/* Marcador de incendio activo (MapLibre usa el elemento tal cual: necesita su tamaño). */
+.active-zone-marker { position: relative; width: 44px; height: 44px; cursor: pointer; }
+/* Tooltip fijado con Shift. */
+.globe-tip.pinned .maplibregl-popup-content { box-shadow: 0 0 0 2px #2f5d43, 0 2px 8px #0004; }
+
+/* --- Incendio enfocado desde el histórico ("Ver en el globo") ------------------------------ */
+.focus-bar {
+  position: fixed;
+  z-index: 4;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 24px);
+  padding: 8px 8px 8px 14px;
+  border: 1px solid #ffffff1f;
+  border-radius: 16px;
+  background: rgba(11, 22, 38, 0.92);
+  backdrop-filter: blur(8px);
+  color: #eef3fa;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  animation: focus-in 0.25s ease-out;
+}
+.focus-bar[hidden] { display: none; }
+@keyframes focus-in { from { opacity: 0; transform: translate(-50%, -8px); } }
+@media (prefers-reduced-motion: reduce) { .focus-bar { animation: none; } }
+.focus-icon { font-size: 20px; }
+.focus-text { display: grid; gap: 1px; min-width: 0; }
+.focus-text b { font: 800 14px Manrope, sans-serif; letter-spacing: -0.3px; white-space: nowrap; }
+.focus-text small { color: #a9b8cc; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.focus-back, .focus-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  transition: background 0.15s ease;
+}
+.focus-back { border: 1px solid #ffffff2b; background: #ffffff14; color: #fff; }
+.focus-back:hover { background: #ffffff26; }
+.focus-close { border: 0; background: #e2603a; color: #fff; box-shadow: 0 4px 12px #e2603a55; }
+.focus-close:hover { background: #cf5230; }
+@media (max-width: 650px) {
+  .focus-bar { flex-wrap: wrap; justify-content: center; }
+  .focus-text { flex-basis: 100%; text-align: center; }
+}

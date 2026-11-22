@@ -359,6 +359,19 @@ Otras opciones: `--force`, `--keep-zips`, `--download-dir`, `--work-dir`. Los zi
 - Cada zip descomprimido ocupa ~2x (Guipúzcoa: 118 MB -> 240 MB; las provincias grandes, varios GB);
   `--work-dir` elige dónde descomprimir.
 
+## Fronteras de países en PostGIS
+
+El globo del frontend (`frontend/index.html`) dibuja los países y filtra los incendios por país
+(`/api/detections?country=ESP`) con las fronteras de Natural Earth 1:50m (dominio público),
+guardadas en `fire.countries`. Se cargan una vez (la carga del pipeline no vacía esa tabla):
+
+```bash
+python scripts/load_countries.py              # descarga el zip a data/natural_earth/ y lo carga
+python scripts/load_countries.py ruta/al.zip  # usa un zip local
+```
+
+La clave de cada país es `ADM0_A3` (`ESP`, `PRT`, `FRA`...). Recargar sustituye todos los países.
+
 ## Cobertura del suelo con SIGPAC
 
 > **Si `land_cover`, `land_cover_confidence`, `sigpac_use`, `is_agricultural` e `is_forest` salen

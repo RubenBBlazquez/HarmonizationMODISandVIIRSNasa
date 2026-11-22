@@ -13,6 +13,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable, Protocol
 
 SRID = 4326
+COUNTRIES_TABLE = "fire.countries"
 DEFAULT_LIMIT = 5000
 # El mapa precarga todo el rango de fechas de una vez (sin bbox): un año son ~60 000 detecciones.
 MAX_LIMIT = 150000
@@ -64,6 +65,9 @@ class Filters:
         Ventana de días del año ``(inicio, fin)`` con formato ``mes*100 + día`` (``812`` = 12 ago).
         Si se informa, se devuelven las **mismas fechas de todos los años** y se ignoran los años
         de ``start`` y ``end`` (ver ``day_window``). Si ``inicio > fin`` cruza el fin de año.
+    country : str | None
+        Código de país (``ADM0_A3`` de Natural Earth: ``ESP``, ``PRT``...): solo lo que cae
+        dentro de su frontera (``fire.countries``).
     """
 
     bbox: tuple[float, float, float, float] | None = None
@@ -73,6 +77,7 @@ class Filters:
     frp_category: str | None = None
     limit: int = DEFAULT_LIMIT
     day_window: tuple[int, int] | None = None
+    country: str | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +155,14 @@ def _window_where(first: str, last: str, window: tuple[int, int]) -> tuple[str, 
     return f"({clause} OR {other})", [*params, *other_params]
 
 
+def _country_clause(geom: str) -> str:
+    """Condición "``geom`` toca la frontera del país ``%s``" (usa el índice espacial)."""
+    return (
+        f"EXISTS (SELECT 1 FROM {COUNTRIES_TABLE} c WHERE c.code = %s "
+        f"AND c.geom && {geom} AND ST_Intersects(c.geom, {geom}))"
+    )
+
+
 def _where(
     filters: Filters, base: list[str], geom: str, first: str, last: str, source_sql: str
 ) -> tuple[str, list[Any]]:
@@ -157,6 +170,10 @@ def _where(
     if filters.bbox is not None:
         clauses.append(f"{geom} && ST_MakeEnvelope(%s, %s, %s, %s, {SRID})")
         params.extend(filters.bbox)
+
+    if filters.country is not None:
+        clauses.append(_country_clause(geom))
+        params.append(filters.country)
 
     if filters.day_window is not None:
         clause, window_params = _window_where(first, last, filters.day_window)
@@ -771,3 +788,43 @@ def fetch_event_detail(
             "features": [detection_feature(row) for row in rows],
         },
     }
+
+
+# --- Países (globo del frontend) -------------------------------------------------------------
+# Tolerancia (grados) al simplificar las fronteras para dibujarlas: ~2 km, invisible a escala de
+# país y deja todo el mundo en menos de 1 MB.
+COUNTRY_SIMPLIFY_DEG = 0.02
+COUNTRY_COORD_DECIMALS = 3
+
+COUNTRIES_SQL = (
+    "SELECT c.code, coalesce(c.name_es, c.name) AS name, c.continent, "
+    "EXISTS (SELECT 1 FROM fire.detections d WHERE d.is_valid AND d.geom_point && c.geom "
+    "AND ST_Intersects(c.geom, d.geom_point)) AS has_data, "
+    f"ST_AsGeoJSON(ST_SimplifyPreserveTopology(c.geom, {COUNTRY_SIMPLIFY_DEG}), "
+    f"{COUNTRY_COORD_DECIMALS})::json AS geometry "
+    f"FROM {COUNTRIES_TABLE} c ORDER BY c.code"
+)
+
+
+def fetch_countries(connection: _Connection) -> dict[str, Any]:
+    """
+    Fronteras simplificadas de los países como FeatureCollection.
+
+    Cada país lleva ``code`` (``ADM0_A3``), ``name`` (en castellano si existe), ``continent`` y
+    ``has_data`` (si tiene alguna detección válida dentro).
+    """
+    features = [
+        {
+            "type": "Feature",
+            "geometry": row["geometry"],
+            "properties": {
+                "code": row["code"],
+                "name": row["name"],
+                "continent": row["continent"],
+                "has_data": bool(row["has_data"]),
+            },
+        }
+        for row in connection.execute(COUNTRIES_SQL).fetchall()
+    ]
+
+    return {"type": "FeatureCollection", "count": len(features), "features": features}

@@ -109,6 +109,37 @@ def test_detections_query_combines_all_filters_in_a_stable_order():
     assert query.sql.count("%s") == len(query.params) + 1  # + LIMIT
 
 
+def test_country_filter_keeps_what_falls_inside_the_border_in_parameter_order():
+    filters = Filters(bbox=SPAIN_BBOX, country="PRT", start=date(2022, 1, 1))
+
+    detections = detections_query(filters)
+    events = events_query(filters)
+
+    assert "c.code = %s AND c.geom && d.geom_point AND ST_Intersects(c.geom, d.geom_point)" in (
+        detections.sql
+    )
+    assert "ST_Intersects(c.geom, e.geom_hull)" in events.sql
+    # bbox, país y fechas: los parámetros siguen el orden de las condiciones.
+    assert detections.params[:5] == (*SPAIN_BBOX, "PRT")
+    assert detections.params[5] == datetime(2022, 1, 1, tzinfo=timezone.utc)
+    assert detections.sql.count("%s") == len(detections.params) + 1
+    assert "c.code = %s" in detections.count_sql
+
+
+def test_fetch_countries_returns_a_feature_per_country_with_its_data_flag():
+    square = {"type": "MultiPolygon", "coordinates": [[[[0, 0], [1, 0], [1, 1], [0, 0]]]]}
+    spain = {"code": "ESP", "name": "España", "continent": "Europe", "has_data": True}
+    portugal = {"code": "PRT", "name": "Portugal", "continent": "Europe", "has_data": False}
+    connection = FakeConnection([{**spain, "geometry": square}, {**portugal, "geometry": square}])
+
+    collection = queries.fetch_countries(connection)
+
+    assert collection["count"] == 2
+    assert [f["properties"]["code"] for f in collection["features"]] == ["ESP", "PRT"]
+    assert collection["features"][0]["properties"] == spain
+    assert collection["features"][1]["geometry"] == square
+
+
 def test_pixel_geometry_builds_the_width_by_height_rectangle_without_buffer():
     point = detections_query(Filters())
     pixel = detections_query(Filters(bbox=SPAIN_BBOX, source="MODIS"), geometry="pixel")

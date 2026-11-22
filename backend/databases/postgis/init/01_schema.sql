@@ -238,3 +238,16 @@ CREATE TABLE IF NOT EXISTS fire.sigpac_loads (
     n_recintos  integer     NOT NULL,
     loaded_at   timestamptz NOT NULL DEFAULT now()
 );
+
+-- Fronteras de países (Natural Earth 1:50m, dominio público), cargadas con
+-- scripts/load_countries.py. Las usa la API para filtrar por país (?country=ESP) y el globo del
+-- frontend para dibujarlos. No las vacía la carga del pipeline (no está en su TRUNCATE).
+CREATE TABLE IF NOT EXISTS fire.countries (
+    code        text        PRIMARY KEY,            -- ADM0_A3 de Natural Earth (ESP, PRT, FRA...)
+    name        text        NOT NULL,               -- nombre en inglés
+    name_es     text,                               -- nombre en castellano
+    continent   text,
+    geom        geometry(MultiPolygon, 4326) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS countries_geom_gix ON fire.countries USING gist (geom);

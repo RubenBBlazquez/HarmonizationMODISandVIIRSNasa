@@ -1,6 +1,6 @@
 // Panel flotante de "Actividad reciente" sobre el mapa: lista los últimos incendios (/api/activity)
-// y se puede ocultar; oculto, solo queda una línea en el borde para volver a mostrarlo.
-import type L from "leaflet";
+// y se puede ocultar; oculto, solo queda una línea en el borde para volver a mostrarlo. No depende
+// de la librería del mapa: recibe cómo enfocar un punto y cómo avisar de que cambia su tamaño.
 
 import { escapeHtml, fetchJson, formatDay, formatNumber, sensorsLabel } from "./shared.js";
 
@@ -51,7 +51,14 @@ function itemHtml(item: ActivityItem, index: number): string {
       FRP máx. ${escapeHtml(item.frp_max_mw)} MW</div></button></li>`;
 }
 
-export function initActivityPanel(map: L.Map): void {
+/**
+ * Activa el panel: `focus` centra el mapa en un incendio y `onResize` se llama cuando el panel se
+ * abre o se cierra (los controles de la derecha se recolocan).
+ */
+export function initActivityPanel(
+  focus: (lat: number, lon: number, zoom: number) => void,
+  onResize: () => void = () => {},
+): void {
   const panel = document.querySelector<HTMLElement>("#activity-panel");
   const hideButton = document.querySelector<HTMLButtonElement>("#activity-hide");
   const showButton = document.querySelector<HTMLButtonElement>("#activity-show");
@@ -63,7 +70,7 @@ export function initActivityPanel(map: L.Map): void {
     document.body.classList.toggle("activity-open", !collapsed);
     showButton!.hidden = !collapsed;
     saveCollapsed(collapsed);
-    window.setTimeout(() => map.invalidateSize(), 300);
+    window.setTimeout(onResize, 300);
   }
   hideButton.addEventListener("click", () => setCollapsed(true));
   showButton.addEventListener("click", () => setCollapsed(false));
@@ -90,7 +97,7 @@ export function initActivityPanel(map: L.Map): void {
       list!.querySelectorAll<HTMLButtonElement>("button[data-index]").forEach((button) =>
         button.addEventListener("click", () => {
           const item = data.items[Number(button.dataset.index)];
-          map.flyTo([item.lat, item.lon], FOCUS_ZOOM);
+          focus(item.lat, item.lon, FOCUS_ZOOM);
         }),
       );
     } catch {

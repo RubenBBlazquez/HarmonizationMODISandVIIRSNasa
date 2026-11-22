@@ -1,0 +1,30 @@
+/* Selector de rango de fechas (DateRangePicker): lo importa dateRange.ts. */
+.date-range { position: relative; }
+.date-range-toggle { width: 100%; display: flex; align-items: center; gap: 6px; text-align: left; border: 1px solid #d9e2d6; background: #fff; border-radius: 6px; padding: 5px 8px; font-size: 11px; color: #26362c; white-space: nowrap; }
+.date-range-icon { flex: none; color: #4d7954; }
+.date-range-toggle:hover, .date-range-toggle[aria-expanded="true"] { border-color: #9fb898; background: #f7faf5; }
+.date-range-popover { position: absolute; top: calc(100% + 4px); left: 0; z-index: 1000; width: 540px; max-width: calc(100vw - 40px); background: #fff; border: 1px solid #dfe7dc; border-radius: 10px; box-shadow: 0 6px 20px #263c2933; padding: 10px; }
+.date-range-popover[hidden] { display: none; }
+.date-range-head { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
+.date-range-head select { flex: 1; min-width: 0; font: inherit; font-size: 11px; border: 1px solid #e4e9e2; border-radius: 6px; padding: 3px; background: #fff; }
+.date-range-head .nav { border: 0; background: #f2f5f0; border-radius: 6px; width: 24px; height: 24px; color: #2f4a39; }
+.date-range-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px 0; }
+.date-range-grid .weekday { text-align: center; font-size: 10px; color: #8a978e; padding: 2px 0; }
+.date-range-grid .day { border: 0; background: none; border-radius: 6px; height: 28px; font-size: 11px; color: #26362c; }
+.date-range-grid .day:hover:not(:disabled) { background: #eef4ea; }
+.date-range-grid .day:disabled { color: #c3cbc5; cursor: default; }
+.date-range-grid .day.in-range { background: #e3eedd; border-radius: 0; }
+.date-range-grid .day.edge { background: #2f5d43; color: #fff; border-radius: 6px; }
+.date-range-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.date-range-panel + .date-range-panel { border-left: 1px solid #edf0eb; padding-left: 14px; }
+.date-range-panel-title { display: grid; gap: 1px; margin-bottom: 6px; }
+.date-range-panel-title small { font-size: 9.5px; text-transform: uppercase; letter-spacing: .6px; color: #7d8a81; }
+.date-range-panel-title b { font-size: 13px; color: #2f5d43; }
+.date-range-note { margin: 8px 0 0; font-size: 10.5px; line-height: 1.4; color: #6d7b72; }
+.date-range-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf0eb; }
+.date-range-done { border: 0; background: #2f5d43; color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 11px; font-weight: 600; }
+.date-range-done:hover { background: #27503a; }
+@media (max-width: 640px) { .date-range-popover { width: 270px; } .date-range-panels { grid-template-columns: 1fr; } .date-range-panel + .date-range-panel { border-left: 0; padding-left: 0; border-top: 1px solid #edf0eb; padding-top: 10px; } }
+.date-range-presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.date-range-presets button { border: 1px solid #e4e9e2; background: #fff; border-radius: 99px; padding: 3px 8px; font-size: 10.5px; color: #2f4a39; }
+.date-range-presets button:hover { background: #f2f7ee; }
