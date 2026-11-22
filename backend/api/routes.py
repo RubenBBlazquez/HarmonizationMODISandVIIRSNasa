@@ -17,6 +17,8 @@ from backend.api.db import get_connection
 GEOJSON_MEDIA_TYPE = "application/geo+json"
 YEARLY_CACHE_TTL_S = 3600  # los datos solo cambian cuando corre el ETL
 _yearly_cache = TTLCache(YEARLY_CACHE_TTL_S)
+COUNTRIES_CACHE_TTL_S = 3600
+_countries_cache = TTLCache(COUNTRIES_CACHE_TTL_S, max_entries=1)
 
 router = APIRouter(prefix="/api", tags=["fires"])
 
@@ -36,6 +38,13 @@ def get_filters(
         Query(description="Solo detecciones."),
     ] = None,
     limit: Annotated[int, Query(ge=1, le=queries.MAX_LIMIT)] = queries.DEFAULT_LIMIT,
+    country: Annotated[
+        str | None,
+        Query(
+            pattern=r"^[A-Z0-9]{3}$",
+            description="País (código ADM0_A3 de /countries: ESP, PRT...).",
+        ),
+    ] = None,
     all_years: Annotated[
         bool,
         Query(
@@ -64,7 +73,9 @@ def get_filters(
 
         window = queries.day_window(start, end)
 
-    return queries.Filters(parsed_bbox, start, end, source, frp_category, limit, window)
+    return queries.Filters(
+        parsed_bbox, start, end, source, frp_category, limit, window, country=country
+    )
 
 
 FiltersDep = Annotated[queries.Filters, Depends(get_filters)]
@@ -120,6 +131,23 @@ def detections(
     return _geojson(queries.fetch_collection(connection, query, queries.detection_feature))
 
 
+@router.get("/countries")
+def countries(connection: Connection) -> JSONResponse:
+    """
+    Fronteras de los países (Natural Earth, simplificadas) para el globo del mapa.
+
+    Cada país lleva ``code`` (el que acepta ``?country=``), ``name``, ``continent`` y
+    ``has_data``. Se cachea ``COUNTRIES_CACHE_TTL_S`` segundos.
+    """
+    content = _countries_cache.get_or_compute(
+        "countries", lambda: queries.fetch_countries(connection)
+    )
+    geojson = _geojson(content)
+    geojson.headers["Cache-Control"] = f"public, max-age={COUNTRIES_CACHE_TTL_S}"
+
+    return geojson
+
+
 @router.get("/history")
 def history(
     connection: Connection,
@@ -161,13 +189,13 @@ def yearly(
     Pensado para contadores globales: sin ``bbox`` cuenta todo el mapa. Devuelve ``window`` y,
     para cada año (del más reciente al más antiguo), ``events``, ``detections`` y
     ``frp_max_mw``. El resultado se cachea ``YEARLY_CACHE_TTL_S`` segundos por ventana de días,
-    zona y fuente (no por año, así que 12-18 ago de 2024 y de 2025 comparten entrada).
+    zona, fuente y país (no por año, así que 12-18 ago de 2024 y de 2025 comparten entrada).
     """
     if filters.start is None or filters.end is None:
         raise HTTPException(status_code=422, detail="yearly necesita start y end")
 
     window = queries.day_window(filters.start, filters.end)
-    key = (window, filters.bbox, filters.source)
+    key = (window, filters.bbox, filters.source, filters.country)
     response.headers["Cache-Control"] = f"public, max-age={YEARLY_CACHE_TTL_S}"
 
     return _yearly_cache.get_or_compute(

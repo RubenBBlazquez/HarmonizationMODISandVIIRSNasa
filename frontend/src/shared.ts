@@ -1,5 +1,5 @@
 // Utilidades comunes del mapa principal (index.ts) y de la pestaña de incendios (fires.ts).
-import L from "leaflet";
+import type L from "leaflet";
 
 // El navegador llama a /api/... y Vite lo reenvía a la API (ver vite.config.ts).
 export const API_BASE = "/api";
@@ -12,11 +12,30 @@ export const FRP_COLORS: Record<string, string> = {
 };
 export const NO_CATEGORY_COLOR = "#8a8f98";
 export const EVENT_COLORS: Record<string, string> = { active: "#c0392b", closed: "#5b6b62" };
+// Color de cada año (contornos al comparar años en el globo y etiquetas del histórico).
+const YEAR_COLORS = [
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#8c564b",
+  "#17becf", "#e377c2", "#bcbd22", "#7f7f7f", "#d62728",
+];
+export const yearColor = (year: number): string => YEAR_COLORS[year % YEAR_COLORS.length];
 export const PIXEL_BORDER_COLOR = "#4a4f55";
 export const PIXEL_FILL_OPACITY = 0.45;
 // VIIRS (375 m) es más preciso que MODIS (1 km): sus píxeles destacan y los de MODIS quedan de fondo.
 export const MODIS_PIXEL_FILL_OPACITY = 0.1;
 export const MODIS_PIXEL_BORDER_OPACITY = 0.35;
+
+const KM_PER_DEGREE_LAT = 111.32;
+
+/**
+ * Medio ancho y medio alto (grados de longitud y latitud) del píxel de una detección
+ * (``area_width_km`` × ``area_height_km``) centrado en la latitud ``lat`` (aprox. local).
+ */
+export function pixelHalfSizeDegrees(lat: number, properties: GeoJSON.GeoJsonProperties): [number, number] {
+  const halfHeight = Number(properties?.area_height_km ?? 0) / 2 / KM_PER_DEGREE_LAT;
+  const halfWidth =
+    Number(properties?.area_width_km ?? 0) / 2 / (KM_PER_DEGREE_LAT * Math.cos((lat * Math.PI) / 180));
+  return [halfWidth, halfHeight];
+}
 
 /** Estilo de un píxel: VIIRS opaco y con borde marcado; MODIS muy transparente y de fondo. */
 export function pixelStyle(feature: GeoJSON.Feature | undefined): L.PathOptions {
@@ -274,45 +293,4 @@ export function eventPopup(properties: Properties): string {
     (${passesLabel(properties)})<br>
     Confianza: ${confidenceLabel(properties.confidence)}<br>
     Huella: ${escapeHtml(properties.footprint_area_km2)} km² (no es superficie quemada)`;
-}
-
-// --- Tooltips fijables: con el tooltip abierto, Shift lo deja fijo en el mapa (Esc los quita) ---
-let hoveredTooltip: L.Tooltip | null = null;
-const pinnedTooltips: L.Tooltip[] = [];
-
-/**
- * Registra el tooltip abierto bajo el cursor (o `null` si se cerró) para poder fijarlo con Shift.
- * Con `closing`, solo lo olvida si el registrado es ese.
- */
-export function trackHoveredTooltip(tooltip: L.Tooltip | null, closing?: L.Tooltip): void {
-  if (closing && hoveredTooltip !== closing) return;
-  hoveredTooltip = tooltip;
-}
-
-/** Como `bindTooltip` (sticky, arriba), pero registrando el tooltip para poder fijarlo con Shift. */
-export function bindPinnableTooltip(layer: L.Layer, content: string): void {
-  layer.bindTooltip(content, { sticky: true, direction: "top" });
-  layer.on("tooltipopen", (event) => {
-    hoveredTooltip = (event as L.TooltipEvent).tooltip;
-  });
-  layer.on("tooltipclose", (event) => {
-    if (hoveredTooltip === (event as L.TooltipEvent).tooltip) hoveredTooltip = null;
-  });
-}
-
-/** Activa Shift (fija el tooltip bajo el cursor) y Esc (quita los fijados) sobre el mapa. */
-export function enableTooltipPinning(map: L.Map): void {
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      pinnedTooltips.splice(0).forEach((tooltip) => tooltip.remove());
-    } else if (event.key === "Shift" && !event.repeat && hoveredTooltip) {
-      const latLng = hoveredTooltip.getLatLng();
-      if (!latLng) return;
-      const pinned = L.tooltip({ permanent: true, direction: "top", interactive: false })
-        .setLatLng(latLng)
-        .setContent(hoveredTooltip.getContent() as string);
-      pinned.addTo(map);
-      pinnedTooltips.push(pinned);
-    }
-  });
 }

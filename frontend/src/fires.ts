@@ -1,6 +1,6 @@
 // Pestaña con todos los incendios de una búsqueda del mapa: una tarjeta con su mapa por incendio.
 // Parámetros de la URL: mode=zone|history, bbox, start, end y (en history) years.
-import { MAX_CARDS, renderCards, summaryTableHtml } from "./fireCards.js";
+import { MAX_CARDS, historyLoadingHtml, renderCards, renderHistory } from "./fireCards.js";
 import {
   BIOMASS_HELP,
   DETECTION_HELP,
@@ -9,7 +9,6 @@ import {
   escapeHtml,
   fetchJson,
   formatDay,
-  formatDayMonth,
   formatNumber,
   type FireCollection,
   type FireFeature,
@@ -28,9 +27,10 @@ const years = params.get("years") ?? String(HISTORY_YEARS);
 const titleElement = document.querySelector<HTMLElement>("#page-title")!;
 const criteriaElement = document.querySelector<HTMLElement>("#criteria")!;
 const statusElement = document.querySelector<HTMLElement>("#status")!;
-const summaryElement = document.querySelector<HTMLTableElement>("#summary")!;
+const historyElement = document.querySelector<HTMLElement>("#history")!;
+const helpElement = document.querySelector<HTMLElement>("#help")!;
 const gridElement = document.querySelector<HTMLElement>("#grid")!;
-document.querySelector<HTMLElement>("#help")!.innerHTML = [
+helpElement.innerHTML = [
   DETECTION_HELP,
   DURATION_HELP,
   `**${BIOMASS_HELP}`,
@@ -44,11 +44,6 @@ function zoneText(): string {
   return `Zona: lat ${south.toFixed(3)} a ${north.toFixed(3)} · lon ${west.toFixed(3)} a ${east.toFixed(3)}`;
 }
 
-function renderSummary(data: HistoryResponse): void {
-  summaryElement.innerHTML = summaryTableHtml(data.periods);
-  summaryElement.hidden = false;
-}
-
 async function load(): Promise<void> {
   if (!bbox) {
     statusElement.textContent = "Falta la zona. Abre esta página desde el mapa (Seleccionar zona).";
@@ -57,8 +52,11 @@ async function load(): Promise<void> {
 
   try {
     if (mode === "history") {
+      // El histórico trae su propia cabecera, indicadores, gráfico y ayuda.
       titleElement.textContent = "Incendios de años anteriores";
-      criteriaElement.textContent = `${zoneText()} · mismas fechas (${formatDayMonth(start)} → ${formatDayMonth(end)}) en los ${years} años anteriores a ${start.slice(0, 4)}.`;
+      for (const element of [criteriaElement, helpElement, statusElement]) element.hidden = true;
+      historyElement.hidden = false;
+      historyElement.innerHTML = historyLoadingHtml();
       const data = await fetchJson<HistoryResponse>("/history", {
         bbox,
         start,
@@ -66,10 +64,7 @@ async function load(): Promise<void> {
         years,
         limit: String(MAX_CARDS),
       });
-      renderSummary(data);
-      const shown = Math.min(data.events.count, MAX_CARDS);
-      statusElement.textContent = `${formatNumber(shown)} incendios de años anteriores, los mayores primero. *La huella no es superficie quemada.`;
-      renderCards(gridElement, data.events.features, true);
+      renderHistory(historyElement, data, { bbox, start, end, years: Number(years) });
     } else {
       titleElement.textContent = "Incendios en la zona";
       const dates = start && end ? ` · del ${formatDay(start)} al ${formatDay(end)}` : "";

@@ -3,6 +3,7 @@
 // mes y año. Cada elección se aplica al momento y `Esc` deshace la última (con la historia vacía,
 // cierra el calendario). Cada calendario solo cambia su propia fecha: en Inicio se deshabilitan los
 // días posteriores al fin, y en Fin los anteriores al inicio. Fechas "AAAA-MM-DD" (UTC).
+import "./dateRange.css";
 
 export interface DateRange {
   start: string;
