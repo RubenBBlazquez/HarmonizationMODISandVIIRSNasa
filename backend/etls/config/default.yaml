@@ -170,3 +170,31 @@ land_cover:
   sigpac_confidence: 0.95
   # Confianza mínima para is_agricultural / is_forest.
   min_confidence: 0.0
+
+static_sources:
+  # Fuentes térmicas fijas (industria, antorchas, lava...) calculadas a partir del histórico con
+  # scripts/load_static_sources.py y guardadas en fire.static_sources. Los ficheros NRT no traen
+  # el `type` de FIRMS: con esto el pipeline marca (is_valid=false, skip_reason) las detecciones
+  # nuevas que caen en esas celdas. Sin la tabla solo avisa en el log.
+  enabled: true
+  # Rejilla: CRS proyectado en metros y lado de celda (~ un píxel VIIRS). Si se cambian hay que
+  # volver a lanzar el análisis.
+  grid_crs: EPSG:25830
+  cell_size_m: 400
+  # Persistencia: detecciones en >= min_days días distintos, de >= min_years años y de
+  # >= min_months_of_year meses del calendario (un incendio o una quema agrícola es estacional;
+  # una industria arde todo el año). Calibrado con el histórico 2000-2025: recupera 326 de las
+  # 368 celdas que FIRMS etiqueta como fuente fija; el resto son industria y la colada de La Palma.
+  min_days: 10
+  min_years: 2
+  min_months_of_year: 6
+  # Celdas con >= N detecciones etiquetadas por FIRMS como fuente fija (type 2). 0 = desactivado.
+  min_firms_static: 3
+  firms_static_reason: static_land_source
+  # Detecciones que no entran en el análisis.
+  ignored_skip_reasons: [active_volcano, volcanic_eruption]
+  # Marca también las 8 celdas vecinas (error de geolocalización del píxel), salvo si SIGPAC dice
+  # que el punto es vegetación (protected_land_covers).
+  match_neighbors: true
+  protected_land_covers: [trees, shrub_and_scrub, grass]
+  skip_reason: persistent_thermal_source

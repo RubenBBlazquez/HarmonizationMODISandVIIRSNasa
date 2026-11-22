@@ -251,3 +251,27 @@ CREATE TABLE IF NOT EXISTS fire.countries (
 );
 
 CREATE INDEX IF NOT EXISTS countries_geom_gix ON fire.countries USING gist (geom);
+
+-- Fuentes térmicas fijas (industria, antorchas, lava...) calculadas a partir del histórico de
+-- detecciones con scripts/load_static_sources.py: celdas de la rejilla (grid_srid, cell_size_m)
+-- con calor persistente o etiquetadas por FIRMS como fuente fija (type 2). El pipeline marca las
+-- detecciones nuevas que caen en ellas. No las vacía la carga del pipeline (no está en su TRUNCATE).
+CREATE TABLE IF NOT EXISTS fire.static_sources (
+    grid_srid           integer         NOT NULL,   -- CRS métrico de la rejilla (25830)
+    cell_size_m         double precision NOT NULL,  -- lado de la celda, m
+    ix                  integer         NOT NULL,   -- floor(x / cell_size_m)
+    iy                  integer         NOT NULL,   -- floor(y / cell_size_m)
+    criterion           text            NOT NULL,   -- persistence, firms_type o ambos
+    n_detections        integer         NOT NULL,
+    n_days              integer         NOT NULL,   -- días distintos con detección
+    n_years             integer         NOT NULL,   -- años distintos
+    n_months_of_year    integer         NOT NULL,   -- meses del calendario distintos (1-12)
+    n_firms_static      integer         NOT NULL,   -- detecciones con type 2 de FIRMS
+    first_date          date            NOT NULL,
+    last_date           date            NOT NULL,
+    computed_at         timestamptz     NOT NULL DEFAULT now(),
+    geom                geometry(Polygon, 4326) NOT NULL,
+    PRIMARY KEY (grid_srid, cell_size_m, ix, iy)
+);
+
+CREATE INDEX IF NOT EXISTS static_sources_geom_gix ON fire.static_sources USING gist (geom);

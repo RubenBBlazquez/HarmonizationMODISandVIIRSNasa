@@ -491,6 +491,83 @@ class LandCoverConfig:
     min_confidence: float = 0.0
 
 
+def _default_ignored_skip_reasons() -> tuple[str, ...]:
+    return ("active_volcano", "volcanic_eruption")
+
+
+def _default_protected_land_covers() -> tuple[str, ...]:
+    return ("trees", "shrub_and_scrub", "grass")
+
+
+@dataclass(frozen=True)
+class StaticSourcesConfig:
+    """
+    Static thermal sources (industry, flares, cooling lava...) found in the detection history.
+
+    ``scripts/load_static_sources.py`` grids the detections of ``fire.detections`` into square
+    cells and stores in ``fire.static_sources`` the cells where the heat is persistent (it shows
+    up all year round, year after year) or that FIRMS already labels as static. The pipeline then
+    flags the new detections that fall in those cells (the NRT files have no FIRMS ``type``).
+
+    Attributes
+    ----------
+    enabled : bool
+        If ``True``, the pipeline reads ``fire.static_sources`` (``database.url``) and flags the
+        detections inside them. Without the table it only logs a warning.
+    grid_crs : str
+        Projected CRS (meters) of the grid. Changing it (or ``cell_size_m``) requires running the
+        analysis again.
+    cell_size_m : float
+        Side of each cell, in meters (~ one VIIRS pixel).
+    min_days, min_years, min_months_of_year : int
+        Persistence criterion: a cell is static if it has detections on at least ``min_days``
+        distinct days, in ``min_years`` distinct years and in ``min_months_of_year`` distinct
+        calendar months (a wildfire or a crop burn is seasonal; an industry is not).
+    min_firms_static : int
+        A cell with at least this many detections labeled by FIRMS as static
+        (``firms_static_reason``) is static too. ``0`` disables this criterion.
+    firms_static_reason : str
+        ``skip_reason`` given to the FIRMS ``type`` of static land sources.
+    ignored_skip_reasons : tuple[str, ...]
+        Detections left out of the analysis (volcanoes already have their own reason).
+    match_neighbors : bool
+        Also flags the detections in the 8 cells around a static one (geolocation error of the
+        pixels), unless their land cover is in ``protected_land_covers``.
+    protected_land_covers : tuple[str, ...]
+        SIGPAC land covers (``land_cover``) that are never flagged by neighborhood.
+    skip_reason : str
+        Reason written in the flagged detections.
+    """
+
+    enabled: bool = False
+    grid_crs: str = "EPSG:25830"
+    cell_size_m: float = 400.0
+    min_days: int = 10
+    min_years: int = 2
+    min_months_of_year: int = 6
+    min_firms_static: int = 3
+    firms_static_reason: str = "static_land_source"
+    ignored_skip_reasons: tuple[str, ...] = field(default_factory=_default_ignored_skip_reasons)
+    match_neighbors: bool = True
+    protected_land_covers: tuple[str, ...] = field(default_factory=_default_protected_land_covers)
+    skip_reason: str = "persistent_thermal_source"
+
+    def __post_init__(self) -> None:
+        if self.cell_size_m <= 0:
+            raise InvalidConfigError("static_sources.cell_size_m must be > 0")
+
+        if min(self.min_days, self.min_years, self.min_months_of_year) < 1:
+            raise InvalidConfigError(
+                "static_sources: min_days, min_years and min_months_of_year must be >= 1"
+            )
+
+        if not 1 <= self.min_months_of_year <= 12:
+            raise InvalidConfigError("static_sources.min_months_of_year must be in 1..12")
+
+        if self.min_firms_static < 0:
+            raise InvalidConfigError("static_sources.min_firms_static must be >= 0")
+
+
 @dataclass(frozen=True)
 class PipelineConfig:
     """Complete pipeline configuration."""
@@ -505,6 +582,7 @@ class PipelineConfig:
     events: EventConfig = field(default_factory=EventConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     land_cover: LandCoverConfig = field(default_factory=LandCoverConfig)
+    static_sources: StaticSourcesConfig = field(default_factory=StaticSourcesConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
     nrt: NrtConfig = field(default_factory=NrtConfig)
