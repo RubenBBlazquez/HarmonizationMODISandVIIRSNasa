@@ -1,11 +1,12 @@
-"""Tests de la matriz completa de confianza fusionada y de la normalización."""
+"""Tests of the complete fused confidence matrix and of the normalization."""
 
 from __future__ import annotations
 
 import pandas as pd
 import pytest
 
-from fire_etl.confidence import (
+from fire_etl.config import ConfidenceConfig
+from fire_etl.transform.processing.confidence import (
     FusedConfidence,
     MissingSensorConfidenceError,
     fuse_confidence,
@@ -14,11 +15,10 @@ from fire_etl.confidence import (
     normalize_modis_confidence,
     normalize_viirs_confidence,
 )
-from fire_etl.config import ConfidenceConfig
 
 LOW, NOMINAL, HIGH = "low", "nominal", "high"
 
-# (modis, viirs) -> (nivel fusionado, low aislada). None = sensor ausente.
+# (modis, viirs) -> (fused level, isolated low). None = sensor absent.
 FULL_MATRIX = [
     (None, LOW, FusedConfidence.LOW, True),
     (None, NOMINAL, FusedConfidence.MEDIUM, False),

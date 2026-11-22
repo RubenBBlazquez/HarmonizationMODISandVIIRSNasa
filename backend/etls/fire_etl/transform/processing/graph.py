@@ -1,4 +1,4 @@
-"""Componentes conexas a partir de pares de geometrías obtenidos con el índice espacial."""
+"""Connected components from geometry pairs obtained with the spatial index."""
 
 from __future__ import annotations
 
@@ -10,19 +10,19 @@ from scipy.sparse.csgraph import connected_components
 
 def component_labels(n_nodes: int, left: np.ndarray, right: np.ndarray) -> np.ndarray:
     """
-    Etiqueta las componentes conexas de un grafo no dirigido.
+    Labels the connected components of an undirected graph.
 
     Parameters
     ----------
     n_nodes : int
-        Número de nodos (posiciones ``0..n_nodes-1``).
+        Number of nodes (positions ``0..n_nodes-1``).
     left, right : np.ndarray
-        Extremos de cada arista.
+        Endpoints of each edge.
 
     Returns
     -------
     np.ndarray
-        Etiqueta entera de componente por nodo.
+        Integer component label per node.
     """
     if n_nodes == 0:
         return np.empty(0, dtype=np.int64)
@@ -38,21 +38,21 @@ def self_join_pairs(
     geometries: gpd.GeoSeries, predicate: str, distance: float | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Pares posicionales ``(i, j)`` de geometrías que cumplen ``predicate`` (vía ``sjoin``).
+    Positional pairs ``(i, j)`` of geometries that satisfy ``predicate`` (via ``sjoin``).
 
     Parameters
     ----------
     geometries : gpd.GeoSeries
-        Geometrías en un CRS métrico.
+        Geometries in a metric CRS.
     predicate : str
-        Predicado espacial de ``geopandas.sjoin`` (``intersects``, ``dwithin``...).
+        Spatial predicate of ``geopandas.sjoin`` (``intersects``, ``dwithin``...).
     distance : float | None
-        Distancia en unidades del CRS para ``dwithin``.
+        Distance in CRS units for ``dwithin``.
 
     Returns
     -------
     tuple[np.ndarray, np.ndarray]
-        Posiciones izquierda y derecha de cada par (incluye los pares ``(i, i)``).
+        Left and right positions of each pair (includes the ``(i, i)`` pairs).
     """
     if geometries.empty:
         return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)

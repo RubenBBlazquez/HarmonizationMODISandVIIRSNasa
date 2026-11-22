@@ -1,4 +1,4 @@
-"""El pipeline principal enriquece las detecciones con SIGPAC cuando está configurado."""
+"""The main pipeline enriches the detections with SIGPAC when configured."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ import pytest
 from shapely.geometry import box
 
 from fire_etl.config import LandCoverConfig
-from fire_etl.outputs import write_tables
-from fire_etl.pipeline import NoDetectionsError, process_detections
-from tests.conftest import BASE_LAT, BASE_LON, ingest_rows, modis_row
+from fire_etl.load.geoparquet import write_tables
+from fire_etl.transform.main import NoDetectionsError, process_detections
+from tests.conftest import BASE_LAT, BASE_LON, modis_row, standardize_rows
 
 
 def _sigpac_folder(tmp_path, use="FO"):
@@ -28,7 +28,8 @@ def _sigpac_folder(tmp_path, use="FO"):
 
 def test_pipeline_adds_land_cover_columns_to_detections(config, tmp_path):
     config = replace(config, land_cover=LandCoverConfig(sigpac_dir=str(_sigpac_folder(tmp_path))))
-    tables = process_detections(ingest_rows(config, modis=[modis_row("2026-09-15 12:00")]), config)
+    standardized = standardize_rows(config, modis=[modis_row("2026-09-15 12:00")])
+    tables = process_detections(standardized, config)
 
     row = tables.detections.iloc[0]
     assert row["land_cover"] == "trees" and bool(row["is_forest"])
@@ -39,7 +40,8 @@ def test_pipeline_adds_land_cover_columns_to_detections(config, tmp_path):
 
 
 def test_pipeline_without_sigpac_dir_adds_no_columns(config):
-    tables = process_detections(ingest_rows(config, modis=[modis_row("2026-09-15 12:00")]), config)
+    standardized = standardize_rows(config, modis=[modis_row("2026-09-15 12:00")])
+    tables = process_detections(standardized, config)
 
     assert "land_cover" not in tables.detections.columns
 
@@ -53,9 +55,9 @@ def _with_frp_thresholds(config, tmp_path, use):
 
 def test_small_fire_in_forest_is_kept_valid_as_low(config, tmp_path):
     config = _with_frp_thresholds(config, tmp_path, "FO")
-    rows = [modis_row("2026-09-15 12:00", frp=1.0)]  # por debajo del mínimo de MODIS
+    rows = [modis_row("2026-09-15 12:00", frp=1.0)]  # below the MODIS minimum
 
-    row = process_detections(ingest_rows(config, modis=rows), config).detections.iloc[0]
+    row = process_detections(standardize_rows(config, modis=rows), config).detections.iloc[0]
 
     assert bool(row["is_valid"]) and row["skip_reason"] is None
     assert row["frp_category"] == "low" and row["frp_class"] == 1
@@ -66,7 +68,7 @@ def test_small_fire_in_farmland_is_still_discarded(config, tmp_path):
     rows = [modis_row("2026-09-15 12:00", frp=1.0)]
 
     with pytest.raises(NoDetectionsError):
-        process_detections(ingest_rows(config, modis=rows), config)
+        process_detections(standardize_rows(config, modis=rows), config)
 
 
 def test_forest_rescue_can_be_disabled(config, tmp_path):
@@ -75,4 +77,4 @@ def test_forest_rescue_can_be_disabled(config, tmp_path):
     rows = [modis_row("2026-09-15 12:00", frp=1.0)]
 
     with pytest.raises(NoDetectionsError):
-        process_detections(ingest_rows(config, modis=rows), config)
+        process_detections(standardize_rows(config, modis=rows), config)

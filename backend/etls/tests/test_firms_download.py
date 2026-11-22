@@ -1,4 +1,4 @@
-"""Tests de la descarga del archivo anual de FIRMS (con un servidor HTTP local, sin Internet)."""
+"""Tests of the FIRMS annual archive download (with a local HTTP server, no Internet)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 import pytest
 
 from fire_etl.config import DownloadConfig
-from fire_etl.firms_download import build_url, download_all, last_complete_year, plan_downloads
+from fire_etl.extract.firms.archive import (
+    build_url,
+    download_all,
+    last_complete_year,
+    plan_downloads,
+)
 
 CSV = "latitude,longitude,acq_date\n42.5,-7.2,2020-01-01\n"
 LOGIN_PAGE = "<html><body>Earthdata Login</body></html>"
@@ -111,7 +116,7 @@ def test_download_rejects_non_csv_content_and_keeps_going(server, tmp_path):
     assert len(result.failed) == 1 and "modis_2012_Spain.csv" in next(iter(result.failed))
     assert not (tmp_path / "raw" / "modis_2012_Spain.csv").exists()
     assert not list((tmp_path / "raw").glob("*.part"))
-    assert len(result.downloaded) == 3  # el resto se descarga igualmente
+    assert len(result.downloaded) == 3  # the rest is downloaded anyway
 
 
 def test_download_config_validation():

@@ -1,67 +1,66 @@
 """
-Ejecuta el pipeline completo sin parámetros por línea de comandos.
+Runs the complete pipeline without command-line parameters.
 
-Descarga (o reutiliza) el archivo de NASA FIRMS de España, MODIS y VIIRS desde el año 2000, y lo
-procesa. Edita las constantes de abajo (o sustituye ``frames`` por tus DataFrames) y lanza el
-script. Genera los datos finales en ``clean_data/`` (GeoJSON para el mapa, JSON para el
-chatbot). Si lo ejecutas en la consola de Python de PyCharm, al terminar tienes a mano
-``tables.detections``, ``tables.observations``, ``tables.events``, etc. como DataFrames.
+It downloads (or reuses) the NASA FIRMS archive of Spain, MODIS and VIIRS since the year 2000,
+and processes it. Edit the constants below (or replace ``frames`` with your DataFrames) and run
+the script. It generates the final data in ``clean_data/`` (GeoJSON for the map, JSON for the
+chatbot). If you run it in the PyCharm Python console, when it finishes you have
+``tables.detections``, ``tables.observations``, ``tables.events``, etc. at hand as DataFrames.
 
     python scripts/run_pipeline.py
 
-Qué acaba en ``clean_data/``
-----------------------------
-Solo los eventos de incendio y las detecciones que pertenecen a algún evento (las observaciones
-aisladas de confianza baja y el ruido por FRP no llegan). Fechas en UTC
-(``YYYY-MM-DDTHH:MM:SSZ``) y coordenadas en EPSG:4326 (``lon, lat`` en GeoJSON). Ficheros:
+What ends up in ``clean_data/``
+-------------------------------
+Only the fire events and the detections that belong to some event (isolated low-confidence
+observations and FRP noise do not get there). Dates in UTC (``YYYY-MM-DDTHH:MM:SSZ``) and
+coordinates in EPSG:4326 (``lon, lat`` in GeoJSON). Files:
 
-- ``fire_events.geojson``: un punto (centroide) por evento, para el mapa.
-- ``fire_event_areas.geojson``: envolvente (polígono) de cada evento. Propiedades: ``event_id``,
+- ``fire_events.geojson``: one point (centroid) per event, for the map.
+- ``fire_event_areas.geojson``: envelope (polygon) of each event. Properties: ``event_id``,
   ``status``, ``frp_category``, ``footprint_area_km2``.
-- ``fire_detections.geojson``: las detecciones de los eventos (puntos).
-- ``fire_events.json``: igual que ``fire_events.geojson`` pero plano y con ``frp_series``, para
-  el chatbot.
-- ``metadata.json``: fecha de generación, recuentos, parámetros del algoritmo, fuentes y avisos.
+- ``fire_detections.geojson``: the detections of the events (points).
+- ``fire_events.json``: same as ``fire_events.geojson`` but flat and with ``frp_series``, for
+  the chatbot.
+- ``metadata.json``: generation date, counts, algorithm parameters, sources and warnings.
 
-Columnas de los eventos (``fire_events.geojson`` / ``fire_events.json``), ordenados del más
-reciente al más antiguo:
+Event columns (``fire_events.geojson`` / ``fire_events.json``), sorted from newest to oldest:
 
-- ``event_id``: identificador del evento.
-- ``status``: ``active`` (sigue activo) o ``closed`` (cerrado).
-- ``first_detection`` / ``last_detection``: primera y última detección del evento (UTC).
-- ``duration_hours``: horas entre la primera y la última detección.
-- ``lat`` / ``lon``: centroide del evento (5 decimales).
-- ``n_detections``: número de detecciones (píxeles) del evento.
-- ``sensors``: sensores que lo han visto: ``MODIS``, ``VIIRS`` o ``MODIS,VIIRS``.
-- ``frp_max_mw``: FRP (potencia radiativa del fuego) máximo, en MW.
-- ``frp_category``: intensidad (low, medium, high) de la detección más intensa del evento.
-- ``biomass_max_kg_s``: tasa máxima de combustión de biomasa (FRP x coeficiente en kg/MJ), en
-  kg/s. Es una tasa, no una masa total.
-- ``biomass_burned_t``: biomasa quemada estimada, en toneladas.
-- ``n_passes``: pasadas de satélite que lo observaron.
-- ``max_pass_gap_hours``: mayor hueco, en horas, entre pasadas consecutivas.
-- ``confidence``: confianza fusionada de las observaciones (low, medium, high, very_high).
-- ``footprint_area_km2``: área de la envolvente (huella de píxeles más buffer), en km². NO es
-  superficie quemada.
-- ``land_cover``: cobertura del suelo dominante entre sus detecciones (SIGPAC normalizado:
-  crops, trees, shrub_and_scrub, grass, built, bare, water, other); vacío si no hay SIGPAC.
-- ``is_agricultural`` / ``is_forest``: ``true`` si ``land_cover`` es ``crops`` / ``trees``;
-  vacío si no hay cobertura.
-- ``summary``: frase en castellano que resume el evento (popups del mapa y chatbot).
-- ``frp_series`` (solo en ``fire_events.json``): serie temporal por observación, con
-  ``window_start``, ``n_detections``, ``frp_total``, ``frp_max`` y ``biomass_total_kg_s``.
+- ``event_id``: event identifier.
+- ``status``: ``active`` (still active) or ``closed``.
+- ``first_detection`` / ``last_detection``: first and last detection of the event (UTC).
+- ``duration_hours``: hours between the first and the last detection.
+- ``lat`` / ``lon``: centroid of the event (5 decimals).
+- ``n_detections``: number of detections (pixels) of the event.
+- ``sensors``: sensors that saw it: ``MODIS``, ``VIIRS`` or ``MODIS,VIIRS``.
+- ``frp_max_mw``: maximum FRP (fire radiative power), in MW.
+- ``frp_category``: intensity (low, medium, high) of the most intense detection of the event.
+- ``biomass_max_kg_s``: maximum biomass burning rate (FRP x coefficient in kg/MJ), in
+  kg/s. It is a rate, not a total mass.
+- ``biomass_burned_t``: estimated burned biomass, in tonnes.
+- ``n_passes``: satellite passes that observed it.
+- ``max_pass_gap_hours``: largest gap, in hours, between consecutive passes.
+- ``confidence``: fused confidence of the observations (low, medium, high, very_high).
+- ``footprint_area_km2``: area of the envelope (pixel footprint plus buffer), in km². It is NOT
+  burned area.
+- ``land_cover``: dominant land cover among its detections (normalized SIGPAC:
+  crops, trees, shrub_and_scrub, grass, built, bare, water, other); empty if there is no SIGPAC.
+- ``is_agricultural`` / ``is_forest``: ``true`` if ``land_cover`` is ``crops`` / ``trees``;
+  empty if there is no land cover.
+- ``summary``: sentence in Spanish that summarizes the event (map popups and chatbot).
+- ``frp_series`` (only in ``fire_events.json``): time series per observation, with
+  ``window_start``, ``n_detections``, ``frp_total``, ``frp_max`` and ``biomass_total_kg_s``.
 
-Columnas de las detecciones (``fire_detections.geojson``):
+Detection columns (``fire_detections.geojson``):
 
-- ``detection_id``: identificador de la detección; ``event_id``: evento al que pertenece.
-- ``acq_datetime``: instante de adquisición (UTC).
-- ``source`` / ``satellite``: producto (MODIS o VIIRS) y satélite que la detectó.
-- ``lat`` / ``lon``: posición del píxel (5 decimales).
-- ``frp_mw``: FRP de la detección, en MW; ``frp_category``: low, medium o high.
-- ``biomass_kg_s``: tasa de combustión de biomasa de la detección, en kg/s.
-- ``confidence``: confianza normalizada de la detección.
-- ``daynight``: ``D`` (día) o ``N`` (noche).
-- ``land_cover``: cobertura del suelo SIGPAC en ese punto (vacío si no hay SIGPAC).
+- ``detection_id``: identifier of the detection; ``event_id``: event it belongs to.
+- ``acq_datetime``: acquisition instant (UTC).
+- ``source`` / ``satellite``: product (MODIS or VIIRS) and satellite that detected it.
+- ``lat`` / ``lon``: position of the pixel (5 decimals).
+- ``frp_mw``: FRP of the detection, in MW; ``frp_category``: low, medium or high.
+- ``biomass_kg_s``: biomass burning rate of the detection, in kg/s.
+- ``confidence``: normalized confidence of the detection.
+- ``daynight``: ``D`` (day) or ``N`` (night).
+- ``land_cover``: SIGPAC land cover at that point (empty if there is no SIGPAC).
 """
 
 import json
@@ -70,53 +69,54 @@ import logging
 from _paths import ETLS_DIR, SAMPLE_DIR
 
 from fire_etl.config import load_config
-from fire_etl.firms_download import download_all
-from fire_etl.firms_nrt import download_nrt, nrt_files
-from fire_etl.ingest import read_firms_csv
+from fire_etl.extract.firms.archive import download_all
+from fire_etl.extract.firms.nrt import download_nrt, nrt_files
+from fire_etl.extract.firms.reader import read_firms_csv
 from fire_etl.pipeline import run_frames
 
-# --- Datos de entrada ------------------------------------------------------------------------
-DOWNLOAD = True  # True: descarga el archivo FIRMS de España (o reutiliza lo ya descargado)
+# --- Input data ------------------------------------------------------------------------------
+DOWNLOAD = True  # True: downloads the Spain FIRMS archive (or reuses what is already downloaded)
 RAW_DIR = ETLS_DIR / "data" / "raw"
-NRT_DIR = RAW_DIR / "nrt"  # NRT del año en curso (necesita el token EARTHDATA_TOKEN)
-# Si no hay ficheros descargados (p. ej. sin Internet) se usan estas muestras.
+NRT_DIR = RAW_DIR / "nrt"  # NRT of the current year (needs the EARTHDATA_TOKEN token)
+# If there are no downloaded files (e.g. no Internet) these samples are used.
 MODIS_FILE = SAMPLE_DIR / "MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt"
 VIIRS_FILE = SAMPLE_DIR / "J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt"
 CONFIG_FILE = ETLS_DIR / "config" / "default.yaml"
-OUTPUT_DIR = ETLS_DIR / "output"  # tablas completas (estado del pipeline, GeoParquet)
-CLEAN_DIR = ETLS_DIR / "clean_data"  # datos finales para el mapa y el chatbot
-PREVIEW_EVENTS = 10  # cuántos eventos se muestran por consola
+OUTPUT_DIR = ETLS_DIR / "output"  # complete tables (pipeline state, GeoParquet)
+CLEAN_DIR = ETLS_DIR / "clean_data"  # final data for the map and the chatbot
+PREVIEW_EVENTS = 10  # how many events are shown in the console
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 config = load_config(CONFIG_FILE)
 
 if DOWNLOAD:
-    logging.info("Descargando datos FIRMS (la primera vez tarda unos minutos)...")
+    logging.info("Downloading FIRMS data (the first time takes a few minutes)...")
     files = download_all(config.download, RAW_DIR).available
-    # Sin token (variable EARTHDATA_TOKEN o .secrets/earthdata_token) solo avisa y sigue.
+    # Without a token (EARTHDATA_TOKEN variable or .secrets/earthdata_token) it only warns and
+    # continues.
     download_nrt(config.nrt, NRT_DIR, base_dir=ETLS_DIR)
 else:
     files = sorted(RAW_DIR.glob("*.csv"))
 
-files = [*files, *nrt_files(NRT_DIR)]  # archivo anual + NRT (se deduplican por detección)
+files = [*files, *nrt_files(NRT_DIR)]  # annual archive + NRT (deduplicated by detection)
 
 if not files:
-    print("Sin ficheros en data/raw: se usan las muestras (ejecuta con DOWNLOAD = True).")
+    print("No files in data/raw: the samples are used (run with DOWNLOAD = True).")
     files = [MODIS_FILE, VIIRS_FILE]
 
-logging.info("Leyendo %s ficheros FIRMS...", len(files))
+logging.info("Reading %s FIRMS files...", len(files))
 frames = [read_firms_csv(path) for path in files]
-logging.info("Procesando %s filas en total.", sum(len(frame) for frame in frames))
+logging.info("Processing %s rows in total.", sum(len(frame) for frame in frames))
 
 tables = run_frames(frames, config, OUTPUT_DIR, CLEAN_DIR)
 
-print("\nRecuentos:", tables.run_parameters["counts"])
+print("\nCounts:", tables.run_parameters["counts"])
 
 final_events = json.loads((CLEAN_DIR / "fire_events.json").read_text(encoding="utf-8"))
-print(f"\nEventos finales: {len(final_events)} (los {PREVIEW_EVENTS} más recientes)")
+print(f"\nFinal events: {len(final_events)} (the {PREVIEW_EVENTS} most recent)")
 for event in final_events[:PREVIEW_EVENTS]:
     print(f"- {event['summary']}")
 
-print(f"\nTablas completas (GeoParquet) en {OUTPUT_DIR}")
-print(f"Datos finales (mapa + chatbot) en {CLEAN_DIR}")
+print(f"\nComplete tables (GeoParquet) in {OUTPUT_DIR}")
+print(f"Final data (map + chatbot) in {CLEAN_DIR}")

@@ -1,12 +1,13 @@
 """
-Descarga del archivo anual de NASA FIRMS (MODIS y VIIRS) para un país.
+Download of the NASA FIRMS annual archive (MODIS and VIIRS) for a country.
 
-Usa el archivo público ``<base_url>/<fuente>/<año>/<fuente>_<año>_<país>.csv``: no necesita cuenta
-ni token y cada CSV ya viene recortado a España. Las descargas son idempotentes (un fichero ya
-descargado no se vuelve a pedir) y atómicas (se escribe en ``.part`` y se renombra al terminar).
+Uses the public archive ``<base_url>/<source>/<year>/<source>_<year>_<country>.csv``: it needs
+no account or token and each CSV already comes clipped to Spain. Downloads are idempotent (an
+already downloaded file is not requested again) and atomic (written to ``.part`` and renamed
+when finished).
 
-El año en curso todavía no está en el archivo; para los datos recientes habrá que usar los
-ficheros NRT o la API (ver README).
+The current year is not in the archive yet; for recent data use the NRT files or the API (see
+README).
 """
 
 from __future__ import annotations
@@ -34,24 +35,24 @@ DOWNLOADED, SKIPPED, MISSING = "downloaded", "skipped", "missing"
 
 
 class UnexpectedContentError(RuntimeError):
-    """El servidor respondió algo que no es un CSV de FIRMS (p. ej. una página de login)."""
+    """The server answered with something that is not a FIRMS CSV (e.g. a login page)."""
 
 
 @dataclass(frozen=True)
 class DownloadItem:
     """
-    Un fichero anual por descargar.
+    An annual file to download.
 
     Attributes
     ----------
     source : str
-        Fuente de FIRMS (``modis``, ``viirs-snpp``, ``viirs-jpss1``).
+        FIRMS source (``modis``, ``viirs-snpp``, ``viirs-jpss1``).
     year : int
-        Año.
+        Year.
     url : str
-        URL completa.
+        Full URL.
     path : Path
-        Destino local.
+        Local destination.
     """
 
     source: str
@@ -62,7 +63,7 @@ class DownloadItem:
 
 @dataclass
 class DownloadResult:
-    """Resultado de la descarga, por categoría."""
+    """Download result, by category."""
 
     downloaded: list[Path] = field(default_factory=list)
     skipped: list[Path] = field(default_factory=list)
@@ -71,17 +72,17 @@ class DownloadResult:
 
     @property
     def available(self) -> list[Path]:
-        """Ficheros presentes en disco tras la descarga (nuevos y ya existentes)."""
+        """Files on disk after the download (new and already existing)."""
         return sorted([*self.downloaded, *self.skipped])
 
 
 def last_complete_year(today: datetime | None = None) -> int:
-    """Último año completo: el año en curso aún no está en el archivo de FIRMS."""
+    """Last complete year: the current year is not in the FIRMS archive yet."""
     return (today or datetime.now(timezone.utc)).year - 1
 
 
 def build_url(config: DownloadConfig, source: str, year: int) -> str:
-    """URL del CSV anual de una fuente."""
+    """URL of the annual CSV of a source."""
     base = config.base_url.rstrip("/")
 
     return f"{base}/{source}/{year}/{source}_{year}_{config.country}.csv"
@@ -91,29 +92,29 @@ def plan_downloads(
     config: DownloadConfig, directory: str | Path | None = None, today: datetime | None = None
 ) -> list[DownloadItem]:
     """
-    Lista los ficheros a descargar: cada fuente desde su primer año con datos.
+    Lists the files to download: each source from its first year with data.
 
     Parameters
     ----------
     config : DownloadConfig
-        Fuentes, rango de años y país.
+        Sources, year range and country.
     directory : str | Path | None
-        Carpeta destino; por defecto ``config.directory``.
+        Destination folder; defaults to ``config.directory``.
     today : datetime | None
-        Fecha de referencia para el último año completo (solo para tests).
+        Reference date for the last complete year (tests only).
 
     Returns
     -------
     list[DownloadItem]
-        Ordenados por fuente y año.
+        Sorted by source and year.
     """
     target = Path(directory or config.directory)
     last_complete = last_complete_year(today)
     end_year = last_complete if config.end_year is None else min(config.end_year, last_complete)
     if config.end_year is not None and config.end_year > last_complete:
         LOGGER.warning(
-            "download.end_year=%s supera el último año completo (%s): el archivo anual no tiene "
-            "el año en curso (se cubre con el NRT).",
+            "download.end_year=%s exceeds the last complete year (%s): the annual archive does "
+            "not have the current year (it is covered by the NRT).",
             config.end_year,
             last_complete,
         )
@@ -135,30 +136,30 @@ def fetch_to_file(
     opener: urllib.request.OpenerDirector | None = None,
 ) -> str:
     """
-    Descarga un CSV de FIRMS de forma atómica (``.part`` + renombrado).
+    Downloads a FIRMS CSV atomically (``.part`` + rename).
 
     Parameters
     ----------
     url : str
-        Dirección del fichero.
+        File address.
     destination : Path
-        Fichero final.
+        Final file.
     timeout_s : float
-        Tiempo máximo de la petición.
+        Maximum request time.
     headers : dict[str, str] | None
-        Cabeceras extra (p. ej. ``Authorization``).
+        Extra headers (e.g. ``Authorization``).
     opener : urllib.request.OpenerDirector | None
-        Cliente HTTP alternativo (p. ej. uno que no siga redirecciones).
+        Alternative HTTP client (e.g. one that does not follow redirects).
 
     Returns
     -------
     str
-        ``DOWNLOADED`` o ``MISSING`` (404).
+        ``DOWNLOADED`` or ``MISSING`` (404).
 
     Raises
     ------
     UnexpectedContentError
-        Si la respuesta no es un CSV de FIRMS (p. ej. una página de login).
+        If the response is not a FIRMS CSV (e.g. a login page).
     """
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     open_url = opener.open if opener is not None else urllib.request.urlopen
@@ -168,7 +169,7 @@ def fetch_to_file(
         with open_url(request, timeout=timeout_s) as response:
             first = response.read(CHUNK_BYTES)
             if not first.startswith(CSV_START):
-                raise UnexpectedContentError(f"{url} no devuelve un CSV de FIRMS")
+                raise UnexpectedContentError(f"{url} does not return a FIRMS CSV")
 
             with partial.open("wb") as handle:
                 handle.write(first)
@@ -190,7 +191,7 @@ def fetch_to_file(
 
 
 def _fetch(item: DownloadItem, config: DownloadConfig) -> str:
-    """Descarga un fichero anual de forma atómica."""
+    """Downloads an annual file atomically."""
     return fetch_to_file(item.url, item.path, config.timeout_s)
 
 
@@ -203,17 +204,17 @@ def _is_retryable(error: Exception) -> bool:
 
 def download_item(item: DownloadItem, config: DownloadConfig) -> str:
     """
-    Descarga un fichero con reintentos. Un 404 no se reintenta (el año no existe).
+    Downloads a file with retries. A 404 is not retried (the year does not exist).
 
     Returns
     -------
     str
-        ``downloaded``, ``skipped`` (ya existía) o ``missing`` (404).
+        ``downloaded``, ``skipped`` (already existed) or ``missing`` (404).
 
     Raises
     ------
     Exception
-        El último error si se agotan los reintentos.
+        The last error if the retries are exhausted.
     """
     if item.path.exists() and item.path.stat().st_size > 0:
         return SKIPPED
@@ -226,12 +227,12 @@ def download_item(item: DownloadItem, config: DownloadConfig) -> str:
 
 def with_retries(action: Callable[[], str], retries: int, wait_s: float, label: str) -> str:
     """
-    Ejecuta ``action`` reintentando los errores de red o de servidor (no los demás).
+    Runs ``action`` retrying network or server errors (not the others).
 
     Raises
     ------
     Exception
-        El último error si se agotan los reintentos, o el primero que no sea reintentable.
+        The last error if the retries are exhausted, or the first non-retryable one.
     """
     for attempt in range(1, retries + 1):
         try:
@@ -240,58 +241,58 @@ def with_retries(action: Callable[[], str], retries: int, wait_s: float, label: 
             if attempt == retries or not _is_retryable(error):
                 raise
 
-            LOGGER.warning("Reintento %s/%s de %s: %s", attempt, retries, label, error)
+            LOGGER.warning("Retry %s/%s of %s: %s", attempt, retries, label, error)
             time.sleep(wait_s * attempt)
 
-    raise AssertionError("inalcanzable")
+    raise AssertionError("unreachable")
 
 
 def download_all(
     config: DownloadConfig, directory: str | Path | None = None, today: datetime | None = None
 ) -> DownloadResult:
     """
-    Descarga todos los ficheros anuales que falten (MODIS y VIIRS de España).
+    Downloads all missing annual files (MODIS and VIIRS for Spain).
 
-    Un fallo en un fichero no detiene el resto: queda en ``failed`` con su motivo.
+    A failure in one file does not stop the rest: it is left in ``failed`` with its reason.
 
     Parameters
     ----------
     config : DownloadConfig
-        Fuentes, rango de años y país.
+        Sources, year range and country.
     directory : str | Path | None
-        Carpeta destino; por defecto ``config.directory``.
+        Destination folder; defaults to ``config.directory``.
     today : datetime | None
-        Fecha de referencia para el último año completo (solo para tests).
+        Reference date for the last complete year (tests only).
 
     Returns
     -------
     DownloadResult
-        Ficheros descargados, ya existentes, inexistentes en el servidor y fallidos.
+        Downloaded files, already existing ones, ones missing on the server and failed ones.
     """
     result = DownloadResult()
     plan = plan_downloads(config, directory, today)
     missing_files = sum(1 for item in plan if not item.path.exists())
     LOGGER.info(
-        "Archivo anual FIRMS: %s ficheros previstos, %s por descargar.%s",
+        "FIRMS annual archive: %s files expected, %s to download.%s",
         len(plan),
         missing_files,
-        " La primera vez tarda unos minutos." if missing_files > 10 else "",
+        " The first time takes a few minutes." if missing_files > 10 else "",
     )
     for item in plan:
         try:
             status = download_item(item, config)
-        except Exception as error:  # un fichero fallido no detiene el resto
-            LOGGER.error("No se pudo descargar %s: %s", item.url, error)
+        except Exception as error:  # a failed file does not stop the rest
+            LOGGER.error("Could not download %s: %s", item.url, error)
             result.failed[item.url] = str(error)
             continue
 
         if status == MISSING:
-            LOGGER.warning("No existe en el archivo: %s", item.url)
+            LOGGER.warning("Not in the archive: %s", item.url)
             result.missing.append(item.url)
         elif status == SKIPPED:
             result.skipped.append(item.path)
         else:
-            LOGGER.info("Descargado %s", item.path.name)
+            LOGGER.info("Downloaded %s", item.path.name)
             result.downloaded.append(item.path)
 
     return result

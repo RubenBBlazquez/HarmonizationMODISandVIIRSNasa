@@ -1,4 +1,4 @@
-"""Tests de la energía radiada y la biomasa quemada estimadas por evento."""
+"""Tests of the estimated radiated energy and burned biomass per event."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ import pandas as pd
 import pytest
 
 from fire_etl.config import BiomassConfig
-from fire_etl.energy import event_energy
+from fire_etl.transform.processing.energy import event_energy
 
 CONFIG = BiomassConfig(coefficient_kg_per_mj=0.368, pass_gap_minutes=30, pass_window_hours=6)
 SECONDS_PER_HOUR = 3600
 
 
 def detections(rows: list[tuple[str, str, str, float]]) -> pd.DataFrame:
-    """Filas ``(evento, "AAAA-MM-DD HH:MM", sensor, frp)``."""
+    """Rows ``(event, "YYYY-MM-DD HH:MM", sensor, frp)``."""
     return pd.DataFrame(
         {
             "event_id": [row[0] for row in rows],
@@ -48,17 +48,17 @@ def test_two_sensors_in_the_same_pass_are_not_double_counted():
     result = event_energy(detections(rows), CONFIG)
 
     assert result.loc["e1", "n_passes"] == 1
-    assert result.loc["e1", "fre_mj"] == pytest.approx(30.0 * 6 * SECONDS_PER_HOUR)  # el mayor
+    assert result.loc["e1", "fre_mj"] == pytest.approx(30.0 * 6 * SECONDS_PER_HOUR)  # the largest
 
 
 def test_passes_split_the_interval_at_the_midpoint_and_cap_at_half_a_window():
-    # Pasadas a las 0:00 (FRP 10) y a las 4:00 (FRP 20), ventana de 6 h.
+    # Passes at 0:00 (FRP 10) and at 4:00 (FRP 20), 6 h window.
     rows = [("e1", "2022-06-16 00:00", "VIIRS", 10.0), ("e1", "2022-06-16 04:00", "VIIRS", 20.0)]
 
     result = event_energy(detections(rows), CONFIG)
 
-    # 1.ª: 3 h antes (media ventana) + 2 h después (mitad del hueco) = 5 h.
-    # 2.ª: 2 h antes + 3 h después = 5 h.
+    # 1st: 3 h before (half a window) + 2 h after (half of the gap) = 5 h.
+    # 2nd: 2 h before + 3 h after = 5 h.
     expected_mj = (10.0 * 5 + 20.0 * 5) * SECONDS_PER_HOUR
     assert result.loc["e1", "n_passes"] == 2
     assert result.loc["e1", "max_pass_gap_hours"] == pytest.approx(4.0)

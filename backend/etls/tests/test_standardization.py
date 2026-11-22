@@ -1,4 +1,4 @@
-"""Tests de ingesta y normalización de CSV FIRMS."""
+"""Tests of the standardization of FIRMS tables (normalization, validation and discards)."""
 
 from __future__ import annotations
 
@@ -9,28 +9,32 @@ import pandas as pd
 import pytest
 
 from fire_etl.config import ExclusionZone, PipelineConfig, config_from_dict
-from fire_etl.ingest import (
-    DETECTION_COLUMNS,
+from fire_etl.extract.firms.reader import (
     Source,
     UnknownFirmsFormatError,
     detect_source,
-    ingest_files,
-    ingest_frames,
-    parse_acq_datetime,
+    read_firms_csv,
 )
+from fire_etl.transform.firms.normalization import DETECTION_COLUMNS, parse_acq_datetime
+from fire_etl.transform.firms.standardization import standardize_detections
 from tests.conftest import (
     BASE_LAT,
     BASE_LON,
     MODIS_SAMPLE,
     VIIRS_SAMPLE,
-    ingest_rows,
     modis_row,
+    standardize_rows,
     viirs_row,
 )
 
 
-def test_ingest_sample_files_normalizes_both_sensors(config):
-    result = ingest_files([MODIS_SAMPLE, VIIRS_SAMPLE], config)
+def _standardize_files(paths, config):
+    """Reads the CSV files (extract) and standardizes them (transform), as the pipeline does."""
+    return standardize_detections([read_firms_csv(path) for path in paths], config)
+
+
+def test_standardize_sample_files_normalizes_both_sensors(config):
+    result = _standardize_files([MODIS_SAMPLE, VIIRS_SAMPLE], config)
     detections = result.detections
 
     assert list(detections.columns) == list(DETECTION_COLUMNS)
@@ -41,16 +45,16 @@ def test_ingest_sample_files_normalizes_both_sensors(config):
     assert detections["detection_id"].is_unique
 
 
-def test_ingest_sample_viirs_keeps_raw_confidence_word(config):
-    detections = ingest_files([VIIRS_SAMPLE], config).detections
+def test_standardize_sample_viirs_keeps_raw_confidence_word(config):
+    detections = _standardize_files([VIIRS_SAMPLE], config).detections
 
     assert set(detections["confidence_raw"]) == {"nominal"}
     assert set(detections["confidence_norm"]) == {"nominal"}
     assert set(detections["satellite"]) == {"N20"}
 
 
-def test_ingest_sample_modis_maps_numeric_confidence(config):
-    detections = ingest_files([MODIS_SAMPLE], config).detections
+def test_standardize_sample_modis_maps_numeric_confidence(config):
+    detections = _standardize_files([MODIS_SAMPLE], config).detections
     by_raw = detections.set_index("confidence_raw")["confidence_norm"]
 
     assert by_raw["0"] == "low"
@@ -75,7 +79,7 @@ def test_parse_acq_datetime_invalid_values_are_nat():
     assert parsed.isna().all()
 
 
-def test_ingest_discards_invalid_rows_with_reasons(config):
+def test_standardize_discards_invalid_rows_with_reasons(config):
     rows = [
         modis_row("2026-09-15 10:00"),
         {**modis_row("2026-09-15 10:00"), "latitude": "95"},
@@ -85,7 +89,7 @@ def test_ingest_discards_invalid_rows_with_reasons(config):
         {**modis_row("2026-09-15 10:00", north_m=4), "daynight": "Z"},
     ]
 
-    result = ingest_rows(config, modis=rows)
+    result = standardize_rows(config, modis=rows)
     reasons = result.discarded.set_index("reason")["count"].to_dict()
 
     assert len(result.detections) == 1
@@ -98,11 +102,11 @@ def test_ingest_discards_invalid_rows_with_reasons(config):
     }
 
 
-def test_ingest_deduplicates_by_deterministic_detection_id(config):
+def test_standardize_deduplicates_by_deterministic_detection_id(config):
     row = viirs_row("2026-09-15 10:00")
 
-    first = ingest_rows(config, viirs=[row, row])
-    second = ingest_rows(config, viirs=[row])
+    first = standardize_rows(config, viirs=[row, row])
+    second = standardize_rows(config, viirs=[row])
 
     assert len(first.detections) == 1
     assert first.discarded.set_index("reason")["count"].to_dict() == {"duplicate": 1}
@@ -112,15 +116,15 @@ def test_ingest_deduplicates_by_deterministic_detection_id(config):
 def test_frp_thresholds_flag_noise_instead_of_discarding_it():
     enabled = PipelineConfig()
     modis = [
-        modis_row("2026-09-15 10:00", frp=5.6),  # día, < 5,7 MW: ruido
-        modis_row("2026-09-15 10:00", north_m=5000, frp=100.0),  # día: media
+        modis_row("2026-09-15 10:00", frp=5.6),  # day, < 5.7 MW: noise
+        modis_row("2026-09-15 10:00", north_m=5000, frp=100.0),  # day: medium
     ]
     viirs = [
-        viirs_row("2026-09-15 02:00", daynight="N", frp=0.6),  # noche, < 0,7 MW: ruido
-        viirs_row("2026-09-15 02:00", north_m=5000, daynight="N", frp=0.8),  # noche: baja
+        viirs_row("2026-09-15 02:00", daynight="N", frp=0.6),  # night, < 0.7 MW: noise
+        viirs_row("2026-09-15 02:00", north_m=5000, daynight="N", frp=0.8),  # night: low
     ]
 
-    result = ingest_rows(enabled, modis=modis, viirs=viirs)
+    result = standardize_rows(enabled, modis=modis, viirs=viirs)
     rows = result.detections.set_index("frp")
 
     assert len(result.detections) == 4
@@ -154,13 +158,13 @@ def test_frp_thresholds_are_read_from_configuration():
         }
     )
 
-    result = ingest_rows(config, viirs=[viirs_row("2026-09-15 10:00", frp=10.0)])
+    result = standardize_rows(config, viirs=[viirs_row("2026-09-15 10:00", frp=10.0)])
 
     assert result.detections["skip_reason"].tolist() == ["below_frp_threshold"]
 
 
 def test_frp_thresholds_can_be_disabled(config):
-    result = ingest_rows(config, viirs=[viirs_row("2026-09-15 02:00", daynight="N", frp=1.0)])
+    result = standardize_rows(config, viirs=[viirs_row("2026-09-15 02:00", daynight="N", frp=1.0)])
 
     assert len(result.detections) == 1
     assert result.detections["is_valid"].tolist() == [True]
@@ -169,7 +173,7 @@ def test_frp_thresholds_can_be_disabled(config):
 
 
 def test_biomass_rate_is_frp_times_configured_coefficient(config):
-    result = ingest_rows(config, modis=[modis_row("2026-09-15 10:00", frp=100.0)])
+    result = standardize_rows(config, modis=[modis_row("2026-09-15 10:00", frp=100.0)])
 
     assert result.detections["biomass_kg_s"].iloc[0] == pytest.approx(36.8)
 
@@ -178,11 +182,11 @@ def test_biomass_coefficient_comes_from_config():
     custom = config_from_dict(
         {
             "biomass": {"coefficient_kg_per_mj": 0.5},
-            "validation": {"apply_frp_thresholds": False},  # FRP sintético por debajo del umbral
+            "validation": {"apply_frp_thresholds": False},  # synthetic FRP below the threshold
         }
     )
 
-    result = ingest_rows(custom, viirs=[viirs_row("2026-09-15 10:00", frp=10.0)])
+    result = standardize_rows(custom, viirs=[viirs_row("2026-09-15 10:00", frp=10.0)])
 
     assert result.detections["biomass_kg_s"].iloc[0] == pytest.approx(5.0)
 
@@ -201,9 +205,9 @@ def test_archive_format_rows_are_normalized_like_nrt_rows(config):
     modis = pd.DataFrame([modis_values.split(",")], columns=modis_columns)
     viirs = pd.DataFrame([viirs_values.split(",")], columns=viirs_columns)
 
-    detections = ingest_frames([modis, viirs], config).detections.set_index("source")
+    detections = standardize_detections([modis, viirs], config).detections.set_index("source")
 
-    assert detections.loc["MODIS", "satellite"] == "A"  # Aqua -> A, como en los NRT
+    assert detections.loc["MODIS", "satellite"] == "A"  # Aqua -> A, as in the NRT files
     assert detections.loc["MODIS", "acq_datetime"] == pd.Timestamp("2020-01-01 02:42", tz="UTC")
     assert detections.loc["VIIRS", "confidence_norm"] == "nominal"
     assert detections.loc["VIIRS", "acq_datetime"] == pd.Timestamp("2020-01-01 00:43", tz="UTC")
@@ -217,11 +221,11 @@ def test_detect_source_by_columns():
         detect_source(["latitude", "longitude"])
 
 
-# --- Fuentes que no son incendios de vegetación (type de FIRMS y zonas de exclusión) ----------
+# --- Sources that are not vegetation fires (FIRMS type and exclusion zones) ------------------
 
 
 def archive_frame(rows: list[dict[str, str]]) -> pd.DataFrame:
-    """Filas en formato de los ficheros anuales de FIRMS (con la columna ``type``)."""
+    """Rows in the format of the FIRMS annual files (with the ``type`` column)."""
     return pd.DataFrame([{**row, "instrument": "VIIRS"} for row in rows], dtype=str)
 
 
@@ -233,8 +237,8 @@ def test_firms_type_other_than_zero_is_flagged_with_its_reason(config):
         {**viirs_row("2022-06-16 01:15", north_m=9000), "type": "3"},
     ]
 
-    detections = ingest_frames([archive_frame(rows)], config).detections
-    result = detections.sort_values("lat", ignore_index=True)  # de sur a norte, como las filas
+    detections = standardize_detections([archive_frame(rows)], config).detections
+    result = detections.sort_values("lat", ignore_index=True)  # from south to north, like the rows
 
     assert result["is_valid"].tolist() == [True, False, False, False]
     assert result["skip_reason"].tolist() == [
@@ -243,11 +247,11 @@ def test_firms_type_other_than_zero_is_flagged_with_its_reason(config):
         "static_land_source",
         "offshore_detection",
     ]
-    assert "firms_type" not in result.columns  # solo se usa para marcar
+    assert "firms_type" not in result.columns  # only used for flagging
 
 
 def test_rows_without_type_column_are_valid(config):
-    result = ingest_rows(config, viirs=[viirs_row("2022-06-16 01:15")]).detections
+    result = standardize_rows(config, viirs=[viirs_row("2022-06-16 01:15")]).detections
 
     assert result["is_valid"].tolist() == [True] and result["skip_reason"].isna().all()
 
@@ -263,14 +267,14 @@ def test_exclusion_zone_flags_detections_inside_the_box_and_dates(config):
     rules = replace(config.validation, exclusion_zones=(zone,))
     zoned = replace(config, validation=rules)
     rows = [
-        viirs_row("2021-10-01 02:00"),  # dentro de la zona y de las fechas
-        viirs_row("2021-10-01 02:00", north_m=20_000),  # fuera de la zona
-        viirs_row("2022-06-01 02:00"),  # dentro de la zona, fuera de las fechas
-        viirs_row("2021-09-19 02:00", north_m=100),  # primer día (incluido)
-        viirs_row("2021-12-31 02:00", north_m=200),  # último día (incluido)
+        viirs_row("2021-10-01 02:00"),  # inside the zone and the dates
+        viirs_row("2021-10-01 02:00", north_m=20_000),  # outside the zone
+        viirs_row("2022-06-01 02:00"),  # inside the zone, outside the dates
+        viirs_row("2021-09-19 02:00", north_m=100),  # first day (inclusive)
+        viirs_row("2021-12-31 02:00", north_m=200),  # last day (inclusive)
     ]
 
-    result = ingest_rows(zoned, viirs=rows).detections.sort_values("acq_datetime")
+    result = standardize_rows(zoned, viirs=rows).detections.sort_values("acq_datetime")
 
     flagged = result[~result["is_valid"]]
     assert sorted(flagged["acq_date"].astype(str)) == ["2021-09-19", "2021-10-01", "2021-12-31"]
@@ -282,9 +286,9 @@ def test_type_reason_wins_over_zone_and_frp_reasons():
     enabled = PipelineConfig()
     zone = ExclusionZone("z", (BASE_LON - 1, BASE_LAT - 1, BASE_LON + 1, BASE_LAT + 1))
     cfg = replace(enabled, validation=replace(enabled.validation, exclusion_zones=(zone,)))
-    row = {**viirs_row("2022-06-16 01:15", daynight="N", frp=0.6), "type": "2"}  # FRP bajo + zona
+    row = {**viirs_row("2022-06-16 01:15", daynight="N", frp=0.6), "type": "2"}  # low FRP + zone
 
-    result = ingest_frames([archive_frame([row])], cfg).detections
+    result = standardize_detections([archive_frame([row])], cfg).detections
 
     assert result["skip_reason"].tolist() == ["static_land_source"]
 
@@ -293,6 +297,6 @@ def test_source_filters_can_be_disabled(config):
     off = replace(config, validation=replace(config.validation, apply_source_filters=False))
     row = {**viirs_row("2022-06-16 01:15"), "type": "1"}
 
-    result = ingest_frames([archive_frame([row])], off).detections
+    result = standardize_detections([archive_frame([row])], off).detections
 
     assert result["is_valid"].tolist() == [True]
