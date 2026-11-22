@@ -14,7 +14,8 @@ from typing import Any, Callable, Protocol
 
 SRID = 4326
 DEFAULT_LIMIT = 5000
-MAX_LIMIT = 50000
+# El mapa precarga todo el rango de fechas de una vez (sin bbox): un año son ~60 000 detecciones.
+MAX_LIMIT = 150000
 COORD_DECIMALS = 5
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 M2_PER_KM2 = 1_000_000.0

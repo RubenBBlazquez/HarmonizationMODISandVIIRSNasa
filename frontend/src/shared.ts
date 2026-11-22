@@ -280,6 +280,15 @@ export function eventPopup(properties: Properties): string {
 let hoveredTooltip: L.Tooltip | null = null;
 const pinnedTooltips: L.Tooltip[] = [];
 
+/**
+ * Registra el tooltip abierto bajo el cursor (o `null` si se cerró) para poder fijarlo con Shift.
+ * Con `closing`, solo lo olvida si el registrado es ese.
+ */
+export function trackHoveredTooltip(tooltip: L.Tooltip | null, closing?: L.Tooltip): void {
+  if (closing && hoveredTooltip !== closing) return;
+  hoveredTooltip = tooltip;
+}
+
 /** Como `bindTooltip` (sticky, arriba), pero registrando el tooltip para poder fijarlo con Shift. */
 export function bindPinnableTooltip(layer: L.Layer, content: string): void {
   layer.bindTooltip(content, { sticky: true, direction: "top" });

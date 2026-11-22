@@ -11,7 +11,6 @@ import {
   NO_CATEGORY_COLOR,
   pixelStyle,
   detectionPopup,
-  bindPinnableTooltip,
   sortByConfidence,
   detectionTooltip,
   enableTooltipPinning,
@@ -27,15 +26,33 @@ import {
 } from "./shared.js";
 import { DateRangePicker, addDays } from "./dateRange.js";
 import { initActivityPanel } from "./activity.js";
+import { DetectionsCanvasLayer } from "./detectionsCanvas.js";
 
 const SPAIN_CENTER: L.LatLngTuple = [40.2, -3.7];
 const SPAIN_ZOOM = 6;
-const ITEM_LIMIT = 5000;
+// Se precarga todo el rango de fechas de una vez (sin recuadro): al mover o acercar el mapa no se
+// vuelve a pedir nada, así que se ve lo mismo a cualquier zoom. Un año son ~60 000 detecciones.
+const PRELOAD_LIMIT = 150000;
 const REFRESH_DELAY_MS = 300;
 const DEFAULT_RANGE_DAYS = 365;
 // Desde este zoom las detecciones se dibujan como su píxel (su área: ancho × alto); por debajo, como puntos
 // (a zoom bajo un píxel de 0,4-1 km mide menos de 1 px y no se vería).
 const PIXEL_MIN_ZOOM = 10;
+const KM_PER_DEGREE_LAT = 111.32;
+
+/** Área del píxel (ancho × alto en km) centrada en el punto, en grados (aprox. local). */
+function pixelBounds(latlng: L.LatLng, properties: GeoJSON.GeoJsonProperties): L.LatLngBounds {
+  const halfHeight = Number(properties?.area_height_km ?? 0) / 2 / KM_PER_DEGREE_LAT;
+  const halfWidth =
+    Number(properties?.area_width_km ?? 0) /
+    2 /
+    (KM_PER_DEGREE_LAT * Math.cos((latlng.lat * Math.PI) / 180));
+  return L.latLngBounds(
+    [latlng.lat - halfHeight, latlng.lng - halfWidth],
+    [latlng.lat + halfHeight, latlng.lng + halfWidth],
+  );
+}
+
 // Selección de zona con el ratón y búsquedas sobre ese recuadro.
 const SELECTION_STYLE: L.PathOptions = {
   color: "#e2603a",
@@ -115,7 +132,15 @@ if (mapContainer) {
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
 
-  const detectionsLayer = L.layerGroup().addTo(map);
+  // Detecciones en un único canvas (fluido con decenas de miles); estilo, popup y tooltip, abajo.
+  const detectionsLayer = new DetectionsCanvasLayer({
+    pixelMinZoom: PIXEL_MIN_ZOOM,
+    pointRadius: 4,
+    pixelBounds,
+    style: (feature, asPixels) => detectionStyle(feature, asPixels),
+    popup: detectionPopup,
+    tooltip: detectionTooltip,
+  }).addTo(map);
   const eventsLayer = L.layerGroup().addTo(map);
 
   // --- Panel de filtros (arriba a la izquierda) ---------------------------------------------
@@ -152,11 +177,9 @@ if (mapContainer) {
   const hiddenKeys = new Set<string>(["status:closed"]);
   let lastEvents: FireCollection | null = null;
   let lastDetections: FireCollection | null = null;
-  let lastAsPixels = false;
   // Totales por año de todo el mapa: fijos, solo cambian con el rango de fechas (no al mover el mapa).
   let lastYearly: YearlyRow[] = [];
   let lastYearlyKey = "";
-  const seenYears = new Set<number>(); // años ya listados: los nuevos nacen desactivados
   let lastAllYears = false; // la última carga fue de las mismas fechas en todos los años
 
   function syncLegend(element: HTMLElement): void {
@@ -225,12 +248,7 @@ if (mapContainer) {
   function updateYearsLegend(): void {
     yearsLegend.hidden = !lastAllYears || lastYearly.length === 0;
     if (yearsLegend.hidden) return;
-    // Por defecto solo está activo el primer año (el más reciente); el resto se activa a mano.
-    // Los años que aparecen más tarde (al mover el mapa) también nacen desactivados.
-    for (const { year } of lastYearly) {
-      if (!seenYears.has(year) && seenYears.size > 0) hiddenKeys.add(`year:${year}`);
-      seenYears.add(year);
-    }
+    // Por defecto todos los años están activos; cada uno se oculta pulsando su chip.
     const rows = lastYearly.map(
       (row) => `<button type="button" class="year-chip" data-year="${row.year}"
         aria-pressed="${!hiddenKeys.has(`year:${row.year}`)}"
@@ -250,8 +268,7 @@ if (mapContainer) {
     redraw();
   });
   allYearsToggle.addEventListener("change", () => {
-    // Al salir del modo se olvida la selección de años; al entrar, empieza solo con el primero.
-    seenYears.clear();
+    // Al entrar o salir del modo se olvida la selección de años: vuelven a estar todos activos.
     for (const key of [...hiddenKeys]) if (key.startsWith("year:")) hiddenKeys.delete(key);
     scheduleRefresh(); // recarga con o sin all_years y muestra el spinner de carga
   });
@@ -310,44 +327,38 @@ if (mapContainer) {
     if (!collection) return null;
     const shown = formatNumber(collection.count);
     return collection.truncated
-      ? `${label}: ${shown} de ${formatNumber(collection.total)} (acerca el mapa)`
+      ? `${label}: ${shown} de ${formatNumber(collection.total)} (reduce el rango de fechas)`
       : `${label}: ${shown}`;
   }
 
-  // Con `asPixels` la API devuelve polígonos (área del píxel); si no, puntos (círculos).
-  function drawDetections(collection: FireCollection | null, asPixels: boolean): void {
-    detectionsLayer.clearLayers();
-    if (!collection) return;
-    detectionsLayer.addLayer(
-      L.geoJSON(sortByConfidence(collection as GeoJSON.FeatureCollection), {
-        filter: (feature) =>
-          !hiddenKeys.has(`frp:${feature.properties?.frp_category}`) &&
-          !(lastAllYears && hiddenKeys.has(`year:${featureYear(feature, "acq_datetime")}`)),
-        pointToLayer: (_feature, latlng) => L.circleMarker(latlng, { radius: 4 }),
-        // `style` se aplica tanto a los polígonos (píxeles) como a los círculos (puntos).
-        // En modo "todos los años" el contorno es del color del año.
-        style: (feature) => {
-          const outline = lastAllYears
-            ? { color: yearColor(featureYear(feature, "acq_datetime")), weight: 2, opacity: 1 }
-            : {};
-          return asPixels
-            ? { ...pixelStyle(feature), ...outline }
-            : {
-                weight: 0.5,
-                color: "#ffffff",
-                fillColor:
-                  FRP_COLORS[String(feature?.properties?.frp_category)] ?? NO_CATEGORY_COLOR,
-                fillOpacity: 0.8,
-                ...outline,
-              };
-        },
-        onEachFeature: (feature, layer) => {
-          layer.bindPopup(detectionPopup(feature.properties));
-          // Al pasar el ratón por el área: sensor, satélite y fecha (día-mes-año), pegado al cursor.
-          bindPinnableTooltip(layer, detectionTooltip(feature.properties));
-        },
-      }),
+  // La API devuelve puntos; desde PIXEL_MIN_ZOOM cada uno se dibuja como el área de su píxel.
+  // En modo "todos los años" el contorno es del color del año.
+  function detectionStyle(feature: GeoJSON.Feature, asPixels: boolean): L.PathOptions {
+    const outline = lastAllYears
+      ? { color: yearColor(featureYear(feature, "acq_datetime")), weight: 2, opacity: 1 }
+      : {};
+    return asPixels
+      ? { ...pixelStyle(feature), ...outline }
+      : {
+          weight: 0.5,
+          color: "#ffffff",
+          fillColor: FRP_COLORS[String(feature?.properties?.frp_category)] ?? NO_CATEGORY_COLOR,
+          fillOpacity: 0.8,
+          ...outline,
+        };
+  }
+
+  function drawDetections(collection: FireCollection | null): void {
+    if (!collection) {
+      detectionsLayer.setFeatures([]);
+      return;
+    }
+    const visible = sortByConfidence(collection).features.filter(
+      (feature) =>
+        !hiddenKeys.has(`frp:${feature.properties?.frp_category}`) &&
+        !(lastAllYears && hiddenKeys.has(`year:${featureYear(feature, "acq_datetime")}`)),
     );
+    detectionsLayer.setFeatures(visible);
   }
 
   function drawEvents(collection: FireCollection | null): void {
@@ -410,12 +421,18 @@ if (mapContainer) {
   };
   function redraw(): void {
     drawEvents(upTo(lastEvents, "first_detection"));
-    drawDetections(upTo(lastDetections, "acq_datetime"), lastAsPixels);
+    drawDetections(upTo(lastDetections, "acq_datetime"));
   }
 
-  // --- Carga de datos: solo lo visible, con las fechas elegidas -----------------------------
+  // --- Carga de datos: todo el rango de fechas de una vez (no depende de lo visible) ----------
   let controller: AbortController | null = null;
   let timer: number | undefined;
+  const asPixels = (): boolean => map.getZoom() >= PIXEL_MIN_ZOOM;
+  // Filtros con los que se cargó cada capa: si no cambian, se reutiliza lo ya descargado.
+  const loaded: Record<"events" | "detections", { key: string; data: FireCollection } | null> = {
+    events: null,
+    detections: null,
+  };
 
   // Contadores por año: globales (todo el mapa), los cachea la API y solo se piden al cambiar el
   // rango. Van aparte del mapa para que no lo retrasen.
@@ -455,17 +472,24 @@ if (mapContainer) {
     controller?.abort();
     controller = new AbortController();
     const { signal } = controller;
-    const params: Record<string, string> = {
-      bbox: map.getBounds().toBBoxString(),
-      limit: String(ITEM_LIMIT),
-    };
+    const params: Record<string, string> = { limit: String(PRELOAD_LIMIT) };
     if (rangeStart()) params.start = rangeStart();
     if (rangeEnd()) params.end = rangeEnd();
     // Mismas fechas del rango en todos los años: lo resuelve la API (necesita start y end).
     if (allYearsToggle.checked && rangeStart() && rangeEnd()) params.all_years = "true";
 
-    const asPixels = map.getZoom() >= PIXEL_MIN_ZOOM;
-    const detectionParams = { ...params, geometry: asPixels ? "pixel" : "point" };
+    const key = JSON.stringify(params);
+    // Lo descargado se guarda aunque la capa se apague, para no pedirlo otra vez al encenderla.
+    const load = async (
+      layer: "events" | "detections", enabled: boolean,
+    ): Promise<FireCollection | null> => {
+      if (!enabled) return null;
+      const cached = loaded[layer];
+      if (cached?.key === key) return cached.data;
+      const data = await fetchJson<FireCollection>(`/${layer}`, params, signal);
+      loaded[layer] = { key, data };
+      return data;
+    };
 
     statusElement.textContent = allYearsToggle.checked
       ? "Cargando las mismas fechas de todos los años…"
@@ -476,12 +500,10 @@ if (mapContainer) {
       const yearlyKey = `${params.start}|${params.end}`;
       if (allYears) void loadYearly(params.start, params.end); // contadores: no bloquean el mapa
       const [events, detections] = await Promise.all([
-        eventsToggle.checked ? fetchJson<FireCollection>("/events", params, signal) : null,
-        detectionsToggle.checked
-          ? fetchJson<FireCollection>("/detections", detectionParams, signal)
-          : null,
+        load("events", eventsToggle.checked),
+        load("detections", detectionsToggle.checked),
       ]);
-      [lastEvents, lastDetections, lastAsPixels] = [events, detections, asPixels];
+      [lastEvents, lastDetections] = [events, detections];
       lastAllYears = params.all_years === "true";
       updateYearsLegend();
       redraw();
@@ -492,7 +514,7 @@ if (mapContainer) {
       const parts = [describe("Eventos", events), describe("Detecciones", detections)];
       statusElement.textContent = parts.filter(Boolean).join(" · ") || "Sin capas activas";
       if (hiddenKeys.size > 0) statusElement.textContent += " · hay elementos ocultos (leyenda)";
-      if (detections && !asPixels) {
+      if (detections && !asPixels()) {
         statusElement.textContent += ` · acerca el mapa (zoom ${PIXEL_MIN_ZOOM}) para ver el píxel`;
       }
     } catch (error) {
@@ -569,7 +591,14 @@ if (mapContainer) {
     timer = window.setTimeout(() => void refresh(), REFRESH_DELAY_MS);
   }
 
-  map.on("moveend", scheduleRefresh);
+  // Mover o acercar el mapa no pide datos (la capa de detecciones cambia sola de punto a píxel);
+  // al cruzar el zoom de los píxeles solo se actualiza el aviso del estado (sin descargar).
+  let drawnAsPixels = asPixels();
+  map.on("zoomend", () => {
+    if (asPixels() === drawnAsPixels) return;
+    drawnAsPixels = asPixels();
+    if (playDay === null) scheduleRefresh();
+  });
   for (const input of [eventsToggle, detectionsToggle]) {
     input.addEventListener("change", scheduleRefresh);
   }
