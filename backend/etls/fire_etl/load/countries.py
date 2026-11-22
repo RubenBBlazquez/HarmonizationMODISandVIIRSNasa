@@ -33,6 +33,21 @@ NATURAL_EARTH_URL = "https://naciscdn.org/naturalearth/50m/cultural/ne_50m_admin
 DOWNLOAD_TIMEOUT_S = 120
 # Natural Earth column -> table column.
 COLUMNS = {"ADM0_A3": "code", "NAME": "name", "NAME_ES": "name_es", "CONTINENT": "continent"}
+# Same table as in backend/databases/postgis/init/01_schema.sql. The loader creates only this
+# table (not the whole schema): a database with a reduced copy of the data (e.g. Railway, without
+# fire.observations) cannot re-apply the full schema because of its foreign keys.
+CREATE_TABLE_SQL = f"""
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE SCHEMA IF NOT EXISTS fire;
+CREATE TABLE IF NOT EXISTS {TABLE} (
+    code        text        PRIMARY KEY,
+    name        text        NOT NULL,
+    name_es     text,
+    continent   text,
+    geom        geometry(MultiPolygon, {STORAGE_SRID}) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS countries_geom_gix ON {TABLE} USING gist (geom);
+"""
 INSERT_SQL = (
     f"INSERT INTO {TABLE} (code, name, name_es, continent, geom) "
     f"VALUES (%s, %s, %s, %s, ST_Multi(ST_GeomFromWKB(%s, {STORAGE_SRID})))"
@@ -161,6 +176,12 @@ def prepare_rows(frame: gpd.GeoDataFrame) -> list[tuple[Any, ...]]:
         )
 
     return rows
+
+
+def ensure_table(connection: _Connection) -> None:
+    """Creates ``fire.countries`` (and its index) if it does not exist; touches nothing else."""
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(CREATE_TABLE_SQL)
 
 
 def load_countries(connection: _Connection, rows: Sequence[tuple[Any, ...]]) -> int:

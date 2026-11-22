@@ -41,7 +41,8 @@ const PRESETS: Preset[] = [
   { label: "Última semana", days: 7 },
   { label: "Último mes", days: 30 },
   { label: "Último año", days: 365 },
-  { label: "Todas las fechas", days: null },
+  // Sin "Todas las fechas": el mapa carga el rango entero de una vez y todo el histórico son
+  // cientos de miles de detecciones.
 ];
 const PANEL_LABELS: Record<Panel, string> = { start: "Inicio", end: "Fin" };
 const PANELS: Panel[] = ["start", "end"];

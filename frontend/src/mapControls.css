@@ -105,7 +105,9 @@ body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-righ
 /* Recuadro de la selección de zona: el cursor en cruz mientras se elige. */
 .selecting canvas.maplibregl-canvas { cursor: crosshair !important; }
 /* Marcador de incendio activo (MapLibre usa el elemento tal cual: necesita su tamaño). */
-.active-zone-marker { position: relative; width: 44px; height: 44px; cursor: pointer; }
+/* Sin `position`: MapLibre coloca el marcador con position:absolute + transform; cambiarlo lo
+   saca de su coordenada (las alertas aparecían apiladas en el mar). */
+.active-zone-marker { width: 44px; height: 44px; cursor: pointer; }
 /* Tooltip fijado con Shift. */
 .globe-tip.pinned .maplibregl-popup-content { box-shadow: 0 0 0 2px #2f5d43, 0 2px 8px #0004; }
 

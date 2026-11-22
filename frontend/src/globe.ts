@@ -330,6 +330,8 @@ interface Focus {
   modals: ReturnType<typeof suspendModals>;
   /** Llegó por la URL (?fire=) desde la pestaña de incendios: "Volver" regresa a esa página. */
   fromUrl: boolean;
+  /** Pasadas del satélite (hora de adquisición) y detecciones acumuladas hasta cada una. */
+  timeline: { time: string; total: number }[];
 }
 let focus: Focus | null = null;
 
@@ -357,8 +359,16 @@ function loadRange(): { start: string; end: string } | null {
 }
 
 // Un único selector para el rango: primer clic, día inicial; segundo clic, día final.
-const picker = new DateRangePicker($<HTMLElement>("#date-range"), (value) => {
+// Último día con datos (de /summary): el rango por defecto es el año que acaba en él.
+let lastDataDay: string | null = null;
+const defaultRange = (): { start: string; end: string } | null =>
+  lastDataDay ? { start: addDays(lastDataDay, -(DEFAULT_RANGE_DAYS - 1)), end: lastDataDay } : null;
+
+const picker = new DateRangePicker($<HTMLElement>("#date-range"), (chosen) => {
   stopPlayback();
+  // Nunca sin rango (sería todo el histórico): si se queda vacío, vuelve al último año.
+  const value = chosen ?? defaultRange();
+  if (!chosen && value) picker.setRange(value);
   saveRange(value);
   updateMonthsHint();
   scheduleRefresh();
@@ -542,6 +552,7 @@ function withHelpers(properties: Properties, dateField: string, order: number): 
     _order: order,
     _year: date.slice(0, 4),
     _day: date.slice(0, 10) || "9999-12-31",
+    _t: date || "9999-12-31T23:59:59Z", // hora exacta: avance pasada a pasada de un incendio
     _yc: year ? yearColor(year) : NO_CATEGORY_COLOR,
   };
 }
@@ -611,6 +622,7 @@ function visibilityFilter(extra: FilterSpecification[]): FilterSpecification {
     conditions.push(["!", ["in", ["get", "_year"], ["literal", hiddenYears]]]);
   }
   if (playDay && !focus) conditions.push(["<=", ["get", "_day"], playDay]);
+  if (playTime && focus) conditions.push(["<=", ["get", "_t"], playTime]);
   return ["all", ...conditions] as FilterSpecification;
 }
 
@@ -923,17 +935,40 @@ map.on("zoomend", () => {
   wasPixels = pixels;
 });
 
-// --- Reproducción: avanza un día por segundo dentro del rango elegido ----------------------------
+// --- Reproducción ----------------------------------------------------------------------------------
+// Con el rango de fechas: un día por segundo. Con un incendio enfocado ("Ver en el globo"): pasada a
+// pasada del satélite, porque la mayoría duran horas o pocos días (un día por paso apenas daría
+// uno o dos fotogramas). En ambos casos se filtran los datos ya cargados, sin pedir más.
 let playTimer: number | undefined;
-playButton.innerHTML = `${PLAY_ICON}<span>Ver avance día a día</span>`;
+// Hora (ISO) hasta la que se ve el incendio enfocado durante su avance.
+let playTime: string | null = null;
+const FOCUS_STEP_MS = 900;
+const PASS_TIME = new Intl.DateTimeFormat("es-ES", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+
+function resetPlayButton(label?: string): void {
+  playButton.classList.remove("playing");
+  const text = label ?? (focus ? "Ver avance del incendio" : "Ver avance día a día");
+  playButton.innerHTML = `${PLAY_ICON}<span>${text}</span>`;
+  playButton.title = focus
+    ? "Muestra cómo creció el incendio, pasada a pasada del satélite"
+    : "Muestra día a día cómo avanzan los incendios del rango elegido";
+}
+resetPlayButton();
 
 function stopPlayback(): void {
   window.clearTimeout(playTimer);
   playTimer = undefined;
-  if (playDay === null) return;
+  if (playDay === null && playTime === null) return;
   playDay = null;
-  playButton.classList.remove("playing");
-  playButton.innerHTML = `${PLAY_ICON}<span>Ver avance día a día</span>`;
+  playTime = null;
+  resetPlayButton();
   applyFilters();
   updateStatus();
 }
@@ -941,7 +976,36 @@ function stopPlayback(): void {
 const countUpTo = (collection: FireCollection | null, field: string): number =>
   collection?.features.filter((feature) => isVisibleByDate(feature, field)).length ?? 0;
 
+function startFocusPlayback(timeline: Focus["timeline"]): void {
+  if (timeline.length === 0) return;
+  playButton.classList.add("playing");
+  playButton.innerHTML = `${STOP_ICON}<span>Detener</span>`;
+  let index = 0;
+  const step = (): void => {
+    if (!focus || playButton.classList.contains("playing") === false) return;
+    const { time, total } = timeline[index];
+    playTime = time;
+    applyFilters();
+    const when = PASS_TIME.format(new Date(time)).replace(/\./g, "");
+    statusElement.textContent =
+      `Avance del incendio: pasada ${index + 1} de ${timeline.length} · ${when} UTC · ` +
+      `${formatNumber(total)} ${total === 1 ? "detección" : "detecciones"}`;
+    if (index >= timeline.length - 1) {
+      playTimer = undefined;
+      resetPlayButton("Repetir avance del incendio");
+      return; // se queda mostrando el incendio completo; pulsar de nuevo vuelve a empezar
+    }
+    index += 1;
+    playTimer = window.setTimeout(step, FOCUS_STEP_MS);
+  };
+  step();
+}
+
 async function startPlayback(): Promise<void> {
+  if (focus) {
+    startFocusPlayback(focus.timeline);
+    return;
+  }
   if (!rangeStart() || !rangeEnd()) {
     statusElement.textContent = "Elige un rango de fechas para ver el avance";
     return;
@@ -963,8 +1027,7 @@ async function startPlayback(): Promise<void> {
       `Avance: ${formatDay(playDay)} (hasta ${formatDay(last)}) · ${formatNumber(shown)} elementos`;
     if (playDay >= last) {
       playTimer = undefined;
-      playButton.classList.remove("playing");
-      playButton.innerHTML = `${PLAY_ICON}<span>Repetir avance</span>`;
+      resetPlayButton("Repetir avance");
       return; // se queda mostrando el rango completo; pulsar de nuevo vuelve a empezar
     }
     playDay = addDays(playDay, 1);
@@ -976,7 +1039,9 @@ async function startPlayback(): Promise<void> {
 playButton.addEventListener("click", () => {
   if (playButton.classList.contains("playing")) stopPlayback();
   else {
+    window.clearTimeout(playTimer);
     playDay = null;
+    playTime = null;
     void startPlayback();
   }
 });
@@ -1418,6 +1483,7 @@ async function focusFire(eventId: string, fromUrl = false): Promise<void> {
       },
       modals,
       fromUrl,
+      timeline: [],
     };
     if (!fromUrl) history.pushState({ siachiFocus: eventId }, "");
   }
@@ -1426,6 +1492,18 @@ async function focusFire(eventId: string, fromUrl = false): Promise<void> {
 
   // Píxeles (zoom alto) y puntos (zoom bajo) del incendio, con el mismo estilo que el rango.
   const sorted = sortByConfidence(detail.detections).features;
+  // Pasadas (horas de adquisición distintas) y detecciones acumuladas hasta cada una.
+  const perPass = new Map<string, number>();
+  for (const feature of sorted) {
+    const time = String(feature.properties.acq_datetime ?? "");
+    if (time) perPass.set(time, (perPass.get(time) ?? 0) + 1);
+  }
+  let accumulated = 0;
+  focus.timeline = [...perPass.keys()].sort().map((time) => {
+    accumulated += perPass.get(time) ?? 0;
+    return { time, total: accumulated };
+  });
+  resetPlayButton();
   const pixels: GeoJSON.Feature[] = [];
   const points: GeoJSON.Feature[] = [];
   sorted.forEach((feature, order) => {
@@ -1468,7 +1546,11 @@ async function focusFire(eventId: string, fromUrl = false): Promise<void> {
 function exitFocus(mode: "back" | "remove", restoreView = true): void {
   if (!focus) return;
   const previous = focus;
+  window.clearTimeout(playTimer);
+  playTimer = undefined;
+  playTime = null;
   focus = null;
+  resetPlayButton();
   setData("focus", EMPTY);
   focusBar.hidden = true;
   alertsControl.hidden = false;
@@ -1520,7 +1602,8 @@ async function start(): Promise<void> {
     // Rango inicial: el último año con datos (o el último elegido).
     const last = summary.last_detection.slice(0, 10);
     picker.setBounds(summary.first_detection.slice(0, 10), last);
-    picker.setRange(loadRange() ?? { start: addDays(last, -(DEFAULT_RANGE_DAYS - 1)), end: last });
+    lastDataDay = last;
+    picker.setRange(loadRange() ?? defaultRange());
     updateMonthsHint();
   }
   if (!borders) {

@@ -10,9 +10,11 @@ import shapely
 from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Polygon, box
 
 from fire_etl.load.countries import (
+    CREATE_TABLE_SQL,
     INSERT_SQL,
     CountriesLoadError,
     as_multipolygon,
+    ensure_table,
     load_countries,
     prepare_rows,
     read_borders,
@@ -93,6 +95,17 @@ def test_load_countries_replaces_the_table_in_one_transaction():
 
     assert connection.transactions == 1
     assert connection.log == [("DELETE FROM fire.countries", None), (INSERT_SQL, rows)]
+
+
+def test_ensure_table_only_creates_the_countries_table():
+    connection = FakeConnection()
+
+    ensure_table(connection)
+
+    assert connection.log == [(CREATE_TABLE_SQL, None)]
+    assert "CREATE TABLE IF NOT EXISTS fire.countries" in CREATE_TABLE_SQL
+    # No foreign keys or other tables: it works on databases with a reduced copy (Railway).
+    assert "FOREIGN KEY" not in CREATE_TABLE_SQL and CREATE_TABLE_SQL.count("CREATE TABLE") == 1
 
 
 def test_load_countries_refuses_to_empty_the_table():
