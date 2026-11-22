@@ -1,4 +1,4 @@
-"""Tests de los datos finales (clean_data) para el mapa y el chatbot."""
+"""Tests of the final data (clean_data) for the map and the chatbot."""
 
 from __future__ import annotations
 
@@ -7,27 +7,31 @@ import json
 import pandas as pd
 import pytest
 
-from fire_etl.clean_data import (
-    DETECTION_COLUMNS,
-    EVENT_COLUMNS,
-    build_clean_data,
-    write_clean_data,
-)
 from fire_etl.config import PipelineConfig
-from fire_etl.ingest import read_firms_csv
-from fire_etl.pipeline import process_detections, run_frames
-from tests.conftest import BASE_LAT, BASE_LON, MODIS_SAMPLE, VIIRS_SAMPLE, ingest_rows, viirs_row
+from fire_etl.extract.firms.reader import read_firms_csv
+from fire_etl.load.clean_data import write_clean_data
+from fire_etl.pipeline import run_frames
+from fire_etl.transform.clean_data import DETECTION_COLUMNS, EVENT_COLUMNS, build_clean_data
+from fire_etl.transform.main import process_detections
+from tests.conftest import (
+    BASE_LAT,
+    BASE_LON,
+    MODIS_SAMPLE,
+    VIIRS_SAMPLE,
+    standardize_rows,
+    viirs_row,
+)
 
 
 def clean_for(config, modis=None, viirs=None):
-    tables = process_detections(ingest_rows(config, modis=modis, viirs=viirs), config)
+    tables = process_detections(standardize_rows(config, modis=modis, viirs=viirs), config)
 
     return build_clean_data(tables, config)
 
 
 @pytest.fixture
 def midnight_event(config):
-    """Un único evento VIIRS (intensidad media) que cruza la medianoche."""
+    """A single VIIRS event (medium intensity) that crosses midnight."""
     return clean_for(
         config,
         viirs=[
@@ -94,7 +98,7 @@ def test_written_files_are_valid_geojson_and_json(config, midnight_event, tmp_pa
     assert len(detections["features"]) == 2
     assert records[0]["first_detection"] == "2026-09-14T23:50:00Z"
     assert isinstance(records[0]["frp_series"], list)
-    assert records[0]["land_cover"] is None  # sin SIGPAC configurado: nulo, no NaN
+    assert records[0]["land_cover"] is None  # without SIGPAC configured: null, not NaN
     assert metadata["counts"] == {"fire_events": 1, "fire_detections": 2}
     assert any("NO es superficie quemada" in note for note in metadata["notes"])
 
@@ -102,11 +106,11 @@ def test_written_files_are_valid_geojson_and_json(config, midnight_event, tmp_pa
 def test_flagged_noise_stays_in_detections_but_not_in_events_or_clean_data():
     enabled = PipelineConfig()
     rows = [
-        viirs_row("2026-09-15 12:00", frp=50.0),  # válida
-        viirs_row("2026-09-15 12:00", north_m=20_000, frp=3.6),  # < 3,7 MW de día: ruido
+        viirs_row("2026-09-15 12:00", frp=50.0),  # valid
+        viirs_row("2026-09-15 12:00", north_m=20_000, frp=3.6),  # < 3.7 MW by day: noise
     ]
 
-    tables = process_detections(ingest_rows(enabled, viirs=rows), enabled)
+    tables = process_detections(standardize_rows(enabled, viirs=rows), enabled)
     clean = build_clean_data(tables, enabled)
     detections = tables.detections.set_index("frp")
 

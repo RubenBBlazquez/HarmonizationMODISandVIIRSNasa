@@ -1,4 +1,4 @@
-"""Tests de ventanas temporales y agrupación en observaciones."""
+"""Tests of time windows and grouping into observations."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ import pandas as pd
 import pytest
 
 from fire_etl.config import PipelineConfig, WindowMode
-from fire_etl.fusion import assign_time_windows, build_observations
-from fire_etl.geometry import build_detection_geometries
-from tests.conftest import ingest_rows, modis_row, viirs_row
+from fire_etl.transform.processing.fusion import assign_time_windows, build_observations
+from fire_etl.transform.processing.geometry import build_detection_geometries
+from tests.conftest import modis_row, standardize_rows, viirs_row
 
 
 def observations_for(config: PipelineConfig, modis=None, viirs=None):
-    detections = ingest_rows(config, modis=modis, viirs=viirs).detections
+    detections = standardize_rows(config, modis=modis, viirs=viirs).detections
     geometries = build_detection_geometries(detections, config.geometry, config.area_of_interest)
     windowed = assign_time_windows(geometries.detections, config.windows.mode)
 
@@ -82,8 +82,8 @@ def test_modis_is_representative_only_without_viirs(config):
 
 
 def test_detections_separated_beyond_buffer_form_distinct_observations(config):
-    # Footprint VIIRS: 400 m + 2 x 400 m de buffer -> 600 m desde el centro; 2 km de separación
-    # dejan 800 m de hueco (más que el buffer).
+    # VIIRS footprint: 400 m + 2 x 400 m of buffer -> 600 m from the center; 2 km of separation
+    # leave an 800 m gap (more than the buffer).
     result = observations_for(
         config,
         viirs=[viirs_row("2026-09-15 10:30"), viirs_row("2026-09-15 10:30", north_m=2000)],

@@ -1,15 +1,15 @@
 """
-Enlace de observaciones entre ventanas consecutivas para formar eventos de incendio.
+Linking of observations across consecutive windows to form fire events.
 
-Dos observaciones se enlazan si sus índices de ventana difieren entre 1 y
-``linking.max_window_gap`` y sus envolventes están a menos de ``linking.max_distance_m``
-(``sjoin`` con ``dwithin``; distancia 0 equivale a intersectar). Así se resuelve el corte
-artificial de los bordes de ventana (p. ej. 23:50 y 00:10 UTC).
+Two observations are linked if their window indices differ by between 1 and
+``linking.max_window_gap`` and their envelopes are less than ``linking.max_distance_m`` apart
+(``sjoin`` with ``dwithin``; distance 0 is equivalent to intersecting). This resolves the
+artificial cut at window edges (e.g. 23:50 and 00:10 UTC).
 
-Identificadores estables: si un evento contiene detecciones que ya pertenecían a eventos
-previos, conserva el ``event_id`` previo más antiguo y registra la fusión de los demás en
-``event_merges``. Los eventos nuevos reciben un id determinista derivado de su detección más
-antigua, de modo que reprocesar los mismos datos produce los mismos ids.
+Stable identifiers: if an event contains detections that already belonged to previous events,
+it keeps the oldest previous ``event_id`` and records the merge of the others in
+``event_merges``. New events receive a deterministic id derived from their oldest detection,
+so reprocessing the same data produces the same ids.
 """
 
 from __future__ import annotations
@@ -22,13 +22,13 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from fire_etl.confidence import max_fused, max_level
 from fire_etl.config import PipelineConfig
-from fire_etl.energy import event_energy
-from fire_etl.fusion import ObservationResult, short_hash
-from fire_etl.graph import component_labels, self_join_pairs
+from fire_etl.transform.processing.confidence import max_fused, max_level
+from fire_etl.transform.processing.energy import event_energy
+from fire_etl.transform.processing.fusion import ObservationResult, short_hash
+from fire_etl.transform.processing.graph import component_labels, self_join_pairs
 
-NOT_OBSERVED = "not_observed"  # sensor que no vio el evento (en vez de nulo)
+NOT_OBSERVED = "not_observed"  # sensor that did not see the event (instead of null)
 
 EVENT_COLUMNS = (
     "event_id",
@@ -69,18 +69,18 @@ MERGE_COLUMNS = ("merged_event_id", "kept_event_id", "merged_at")
 @dataclass(frozen=True)
 class PreviousState:
     """
-    Estado de una ejecución anterior.
+    State of a previous run.
 
     Attributes
     ----------
     detections : pd.DataFrame
-        Detecciones ya ingeridas (esquema común).
+        Already standardized detections (common schema).
     event_detections : pd.DataFrame
-        Relación ``event_id`` - ``detection_id``.
+        ``event_id`` - ``detection_id`` relation.
     events : pd.DataFrame
-        Al menos ``event_id`` y ``first_detection``.
+        At least ``event_id`` and ``first_detection``.
     merges : pd.DataFrame
-        Fusiones registradas (``MERGE_COLUMNS``).
+        Recorded merges (``MERGE_COLUMNS``).
     """
 
     detections: pd.DataFrame
@@ -92,18 +92,18 @@ class PreviousState:
 @dataclass(frozen=True)
 class EventResult:
     """
-    Eventos y relaciones.
+    Events and relations.
 
     Attributes
     ----------
     events : gpd.GeoDataFrame
-        Una fila por evento (``EVENT_COLUMNS``), geometría activa ``geom_hull``.
+        One row per event (``EVENT_COLUMNS``), active geometry ``geom_hull``.
     event_detections : pd.DataFrame
-        Relación evento - detección - observación.
+        Event - detection - observation relation.
     observations : gpd.GeoDataFrame
-        Observaciones con su ``event_id`` (nulo si se excluyeron por low aislada).
+        Observations with their ``event_id`` (null if excluded as isolated low).
     merges : pd.DataFrame
-        Histórico de fusiones (previas + nuevas).
+        History of merges (previous + new).
     """
 
     events: gpd.GeoDataFrame
@@ -116,21 +116,21 @@ def link_observations(
     observations: gpd.GeoDataFrame, max_distance_m: float, max_window_gap: int
 ) -> np.ndarray:
     """
-    Agrupa observaciones de ventanas consecutivas cercanas en componentes (eventos).
+    Groups close observations of consecutive windows into components (events).
 
     Parameters
     ----------
     observations : gpd.GeoDataFrame
-        Observaciones con ``window_index`` y geometría activa en CRS métrico.
+        Observations with ``window_index`` and active geometry in metric CRS.
     max_distance_m : float
-        Distancia máxima de enlace en metros.
+        Maximum linking distance in meters.
     max_window_gap : int
-        Diferencia máxima de índice de ventana.
+        Maximum window index difference.
 
     Returns
     -------
     np.ndarray
-        Etiqueta de evento por observación (posicional).
+        Event label per observation (positional).
     """
     left, right = self_join_pairs(observations.geometry, "dwithin", distance=max_distance_m)
     window_index = observations["window_index"].to_numpy()
@@ -162,26 +162,25 @@ def assign_event_ids(
     components: pd.DataFrame, previous: PreviousState | None, merged_at: datetime
 ) -> tuple[dict[int, str], pd.DataFrame]:
     """
-    Asigna ``event_id`` estables a las componentes y detecta fusiones de eventos previos.
+    Assigns stable ``event_id`` values to the components and detects merges of previous events.
 
-    Las componentes se recorren de la más antigua a la más reciente. Cada una conserva el
-    evento previo más antiguo de sus detecciones que no haya reclamado otra componente; el
-    resto de eventos previos que contiene se registran como fusionados en él. Si no hereda
-    ninguno, recibe ``evt_<hash(detección más antigua)>``.
+    Components are traversed from oldest to newest. Each one keeps the oldest previous event of its
+    detections that no other component has claimed; the rest of the previous events it contains are
+    recorded as merged into it. If it inherits none, it receives ``evt_<hash(oldest detection)>``.
 
     Parameters
     ----------
     components : pd.DataFrame
-        ``_component``, ``detection_id`` y ``acq_datetime`` de cada detección enlazada.
+        ``_component``, ``detection_id`` and ``acq_datetime`` of each linked detection.
     previous : PreviousState | None
-        Estado previo.
+        Previous state.
     merged_at : datetime
-        Marca temporal registrada en las fusiones.
+        Timestamp recorded in the merges.
 
     Returns
     -------
     tuple[dict[int, str], pd.DataFrame]
-        Correspondencia componente -> ``event_id`` y nuevas fusiones (``MERGE_COLUMNS``).
+        Component -> ``event_id`` mapping and new merges (``MERGE_COLUMNS``).
     """
     prior_ids = _prior_event_ids(components, previous)
     reserved = set() if previous is None else set(previous.events["event_id"])
@@ -250,7 +249,7 @@ def _event_status(last_detection: pd.Series, reference: pd.Timestamp, hours: flo
 
 
 def empty_events(crs: object) -> gpd.GeoDataFrame:
-    """Tabla de eventos vacía con el esquema de ``EVENT_COLUMNS``."""
+    """Empty events table with the ``EVENT_COLUMNS`` schema."""
     columns = {column: pd.Series(dtype="object") for column in EVENT_COLUMNS}
     columns["geom_centroid"] = gpd.GeoSeries([], crs=crs)
     columns["geom_hull"] = gpd.GeoSeries([], crs=crs)
@@ -266,25 +265,25 @@ def summarize_events(
     reference: datetime,
 ) -> gpd.GeoDataFrame:
     """
-    Calcula los atributos de cada evento.
+    Computes the attributes of each event.
 
     Parameters
     ----------
     observations : gpd.GeoDataFrame
-        Observaciones enlazadas (con ``event_id`` no nulo).
+        Linked observations (with non-null ``event_id``).
     detections : gpd.GeoDataFrame
-        Detecciones enlazadas (con ``event_id``) y ``geom_point`` métrico.
+        Linked detections (with ``event_id``) and metric ``geom_point``.
     merges : pd.DataFrame
-        Histórico de fusiones, para listar los ids absorbidos por cada evento.
+        History of merges, to list the ids absorbed by each event.
     config : PipelineConfig
-        Configuración (estado y parámetros registrados).
+        Configuration (recorded status and parameters).
     reference : datetime
-        Instante de referencia para decidir ``active`` / ``closed``.
+        Reference instant to decide ``active`` / ``closed``.
 
     Returns
     -------
     gpd.GeoDataFrame
-        Eventos (``EVENT_COLUMNS``) en el CRS métrico.
+        Events (``EVENT_COLUMNS``) in the metric CRS.
     """
     if detections.empty:
         return empty_events(detections.crs)
@@ -353,21 +352,22 @@ def build_events(
     result: ObservationResult, config: PipelineConfig, previous: PreviousState | None = None
 ) -> EventResult:
     """
-    Enlaza observaciones en eventos con ``event_id`` estable y calcula sus atributos.
+    Links observations into events with stable ``event_id`` and computes their attributes.
 
     Parameters
     ----------
     result : ObservationResult
-        Detecciones y observaciones de :func:`fire_etl.fusion.build_observations`.
+        Detections and observations from
+        :func:`fire_etl.transform.processing.fusion.build_observations`.
     config : PipelineConfig
-        Configuración del pipeline.
+        Pipeline configuration.
     previous : PreviousState | None
-        Estado de la ejecución anterior (para conservar ids y registrar fusiones).
+        State of the previous run (to keep ids and record merges).
 
     Returns
     -------
     EventResult
-        Eventos, relación evento-detección, observaciones con ``event_id`` y fusiones.
+        Events, event-detection relation, observations with ``event_id`` and merges.
     """
     observations = result.observations.copy()
     eligible = np.ones(len(observations), dtype=bool)
@@ -382,7 +382,7 @@ def build_events(
     detections = result.detections.merge(
         linked[["observation_id", "_component"]], on="observation_id", how="inner"
     )
-    # Referencia única (estado y fecha de fusión): incluye también las detecciones no enlazadas.
+    # Single reference (status and merge date): also includes the unlinked detections.
     reference = config.events.reference_time or result.detections["acq_datetime"].max()
     component_ids, new_merges = assign_event_ids(
         detections[["_component", "detection_id", "acq_datetime"]], previous, reference

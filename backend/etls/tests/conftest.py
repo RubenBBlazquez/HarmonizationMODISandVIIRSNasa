@@ -1,4 +1,4 @@
-"""Fixtures y constructores de detecciones FIRMS sintéticas compartidos por los tests."""
+"""Fixtures and builders of synthetic FIRMS detections shared by the tests."""
 
 from __future__ import annotations
 
@@ -10,20 +10,20 @@ import pandas as pd
 import pytest
 
 from fire_etl.config import PipelineConfig
-from fire_etl.ingest import IngestResult, ingest_frames
+from fire_etl.transform.firms.standardization import StandardizedDetections, standardize_detections
 
 SAMPLE_DIR = Path(__file__).resolve().parents[1] / "data" / "sample"
 MODIS_SAMPLE = SAMPLE_DIR / "MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt"
 VIIRS_SAMPLE = SAMPLE_DIR / "J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt"
 
-# Punto de referencia (Galicia) y conversión aproximada metros -> grados.
+# Reference point (Galicia) and approximate meters -> degrees conversion.
 BASE_LAT = 42.5
 BASE_LON = -7.2
 METERS_PER_DEG_LAT = 111_320.0
 
 
 def offset(north_m: float = 0.0, east_m: float = 0.0) -> tuple[float, float]:
-    """Devuelve ``(lat, lon)`` desplazado ``north_m`` / ``east_m`` metros del punto base."""
+    """Returns ``(lat, lon)`` shifted ``north_m`` / ``east_m`` meters from the base point."""
     lat = BASE_LAT + north_m / METERS_PER_DEG_LAT
     lon = BASE_LON + east_m / (METERS_PER_DEG_LAT * math.cos(math.radians(BASE_LAT)))
 
@@ -41,7 +41,7 @@ def modis_row(
     satellite: str = "A",
     daynight: str = "D",
 ) -> dict[str, str]:
-    """Fila MODIS en formato FIRMS; ``when`` es ``"YYYY-MM-DD HH:MM"`` UTC."""
+    """MODIS row in FIRMS format; ``when`` is ``"YYYY-MM-DD HH:MM"`` UTC."""
     lat, lon = offset(north_m, east_m)
     acq_date, acq_time = when.split(" ")
 
@@ -73,7 +73,7 @@ def viirs_row(
     satellite: str = "N20",
     daynight: str = "D",
 ) -> dict[str, str]:
-    """Fila VIIRS en formato FIRMS; ``when`` es ``"YYYY-MM-DD HH:MM"`` UTC."""
+    """VIIRS row in FIRMS format; ``when`` is ``"YYYY-MM-DD HH:MM"`` UTC."""
     lat, lon = offset(north_m, east_m)
     acq_date, acq_time = when.split(" ")
 
@@ -94,20 +94,20 @@ def viirs_row(
     }
 
 
-def ingest_rows(
+def standardize_rows(
     config: PipelineConfig,
     modis: list[dict[str, str]] | None = None,
     viirs: list[dict[str, str]] | None = None,
-) -> IngestResult:
-    """Ingiere filas sintéticas MODIS y/o VIIRS."""
+) -> StandardizedDetections:
+    """Standardizes synthetic MODIS and/or VIIRS rows."""
     frames = [pd.DataFrame(rows, dtype=str) for rows in (modis, viirs) if rows]
 
-    return ingest_frames(frames, config)
+    return standardize_detections(frames, config)
 
 
 @pytest.fixture
 def config() -> PipelineConfig:
-    """Configuración por defecto sin el filtro de FRP (las filas sintéticas usan FRP bajos)."""
+    """Default configuration without the FRP filter (synthetic rows use low FRP values)."""
     base = PipelineConfig()
 
     return replace(base, validation=replace(base.validation, apply_frp_thresholds=False))

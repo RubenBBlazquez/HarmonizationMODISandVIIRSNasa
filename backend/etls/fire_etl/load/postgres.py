@@ -1,16 +1,15 @@
 """
-Carga de las tablas del pipeline en PostGIS, además de los GeoParquet.
+Loading of the pipeline tables into PostGIS, in addition to the GeoParquet files.
 
-El GeoParquet es el respaldo: se escribe siempre primero y, si la base de datos no está
-disponible o falla la carga, se registra el error y el pipeline continúa.
+The GeoParquet is the backup: it is always written first and, if the database is unavailable
+or the load fails, the error is logged and the pipeline continues.
 
-Cada carga **sustituye** el contenido de las tablas por la foto actual del pipeline (``TRUNCATE``
-+ ``INSERT`` en una sola transacción). El pipeline reprocesa todo el histórico en cada
-ejecución y los identificadores de observación pueden cambiar al llegar datos nuevos, así que un
-*upsert* dejaría filas obsoletas. La base de datos queda idéntica a ``output/``. Las tablas
-siguen el esquema de ``backend/databases/postgis/init/01_schema.sql``, que se reaplica en cada
-carga (es idempotente) para que las bases creadas con un esquema antiguo reciban las columnas
-nuevas.
+Each load **replaces** the content of the tables with the current snapshot of the pipeline
+(``TRUNCATE`` + ``INSERT`` in a single transaction). The pipeline reprocesses the whole history
+on every run and observation identifiers may change when new data arrives, so an *upsert* would
+leave stale rows. The database ends up identical to ``output/``. The tables follow the schema
+of ``backend/databases/postgis/init/01_schema.sql``, which is reapplied on every load (it is
+idempotent) so that databases created with an old schema receive the new columns.
 """
 
 from __future__ import annotations
@@ -29,23 +28,28 @@ import shapely
 from pyproj import CRS
 
 from fire_etl.config import PipelineConfig
-from fire_etl.events import EVENT_COLUMNS, EVENT_DETECTION_COLUMNS, MERGE_COLUMNS
-from fire_etl.fusion import OBSERVATION_COLUMNS
-from fire_etl.outputs import DETECTION_OUTPUT_COLUMNS, PipelineTables, to_storage_crs
-from fire_etl.sigpac_land_cover import NEW_COLUMNS as LAND_COVER_COLUMNS
+from fire_etl.load.geoparquet import DETECTION_OUTPUT_COLUMNS, to_storage_crs
+from fire_etl.transform.processing.events import (
+    EVENT_COLUMNS,
+    EVENT_DETECTION_COLUMNS,
+    MERGE_COLUMNS,
+)
+from fire_etl.transform.processing.fusion import OBSERVATION_COLUMNS
+from fire_etl.transform.sigpac_land_cover import NEW_COLUMNS as LAND_COVER_COLUMNS
+from fire_etl.transform.tables import PipelineTables
 
 LOGGER = logging.getLogger(__name__)
 
 SCHEMA = "fire"
 SCHEMA_FILE = (
-    Path(__file__).resolve().parents[2] / "databases" / "postgis" / "init" / "01_schema.sql"
+    Path(__file__).resolve().parents[3] / "databases" / "postgis" / "init" / "01_schema.sql"
 )
 CONNECT_TIMEOUT_S = 5
-WKT_PRECISION = 7  # decimales de las coordenadas en grados (~1 cm)
-INSERT_CHUNK_ROWS = 20_000  # filas por ``executemany``: permite informar del avance
+WKT_PRECISION = 7  # decimal places of the coordinates in degrees (~1 cm)
+INSERT_CHUNK_ROWS = 20_000  # rows per ``executemany``: allows reporting progress
 
-# Orden de inserción compatible con las claves foráneas (detections -> observations es
-# DEFERRABLE INITIALLY DEFERRED en el esquema).
+# Insertion order compatible with the foreign keys (detections -> observations is
+# DEFERRABLE INITIALLY DEFERRED in the schema).
 TABLE_ORDER = ("fire_events", "detections", "observations", "event_detections", "event_merges")
 GEOMETRY_COLUMNS = frozenset({"geom_point", "geom_footprint", "geom_centroid", "geom_hull"})
 JSON_COLUMNS = frozenset({"frp_series", "merged_event_ids", "params"})
@@ -66,16 +70,16 @@ class _Connection(Protocol):
 @dataclass(frozen=True)
 class TableLoad:
     """
-    Filas de una tabla listas para insertar.
+    Rows of a table ready to insert.
 
     Attributes
     ----------
     table : str
-        Nombre de la tabla (sin esquema).
+        Table name (without schema).
     columns : tuple[str, ...]
-        Columnas, en el orden de ``rows``.
+        Columns, in the order of ``rows``.
     rows : list[tuple]
-        Valores ya convertidos a tipos de Python (geometrías como WKT).
+        Values already converted to Python types (geometries as WKT).
     """
 
     table: str
@@ -84,14 +88,14 @@ class TableLoad:
 
 
 def describe_url(url: str) -> str:
-    """``host:puerto/base`` sin credenciales, para los logs."""
+    """``host:port/database`` without credentials, for the logs."""
     parts = urlsplit(url)
 
     return f"{parts.hostname}:{parts.port or 5432}{parts.path}"
 
 
 def _cell(value: Any) -> Any:
-    """Convierte un valor de pandas/shapely a un tipo que psycopg sepa adaptar."""
+    """Converts a pandas/shapely value to a type psycopg knows how to adapt."""
     if isinstance(value, shapely.Geometry):
         return shapely.to_wkt(value, rounding_precision=WKT_PRECISION, trim=True)
 
@@ -126,19 +130,19 @@ def _table(frame: pd.DataFrame, table: str, columns: Sequence[str], crs: str) ->
 
 def build_load_plan(tables: PipelineTables, storage_crs: str) -> list[TableLoad]:
     """
-    Convierte las tablas del pipeline en filas para PostGIS (función pura, sin conexión).
+    Converts the pipeline tables into rows for PostGIS (pure function, no connection).
 
     Parameters
     ----------
     tables : PipelineTables
-        Resultado del pipeline (geometrías en el CRS métrico).
+        Pipeline result (geometries in the metric CRS).
     storage_crs : str
-        CRS de almacenamiento de las geometrías (EPSG:4326).
+        Storage CRS of the geometries (EPSG:4326).
 
     Returns
     -------
     list[TableLoad]
-        Una entrada por tabla, en el orden de inserción.
+        One entry per table, in insertion order.
     """
     land_cover = [name for name in LAND_COVER_COLUMNS if name in tables.detections.columns]
     *attributes, geom_point, geom_footprint = DETECTION_OUTPUT_COLUMNS
@@ -159,7 +163,7 @@ def build_load_plan(tables: PipelineTables, storage_crs: str) -> list[TableLoad]
 
 
 def insert_statement(load: TableLoad, srid: int) -> str:
-    """``INSERT`` parametrizado de una tabla (geometrías desde WKT y JSON con ``::jsonb``)."""
+    """Parameterized ``INSERT`` of a table (geometries from WKT and JSON with ``::jsonb``)."""
     placeholders = []
     for column in load.columns:
         if column in GEOMETRY_COLUMNS:
@@ -176,7 +180,7 @@ def insert_statement(load: TableLoad, srid: int) -> str:
 
 
 def truncate_statement() -> str:
-    """Vacía todas las tablas a la vez (necesario por las claves foráneas)."""
+    """Empties all tables at once (needed because of the foreign keys)."""
     tables = ", ".join(f"{SCHEMA}.{name}" for name in reversed(TABLE_ORDER))
 
     return f"TRUNCATE {tables}"
@@ -184,10 +188,10 @@ def truncate_statement() -> str:
 
 def apply_schema(connection: _Connection, schema_file: Path = SCHEMA_FILE) -> bool:
     """
-    Aplica el esquema SQL (idempotente). Devuelve ``False`` si el fichero no existe.
+    Applies the SQL schema (idempotent). Returns ``False`` if the file does not exist.
     """
     if not schema_file.exists():
-        LOGGER.warning("No se encontró el esquema %s: se omite su aplicación.", schema_file)
+        LOGGER.warning("Schema %s not found: skipping its application.", schema_file)
         return False
 
     with connection.transaction(), connection.cursor() as cursor:
@@ -198,12 +202,12 @@ def apply_schema(connection: _Connection, schema_file: Path = SCHEMA_FILE) -> bo
 
 def execute_plan(connection: _Connection, plan: Sequence[TableLoad], srid: int) -> dict[str, int]:
     """
-    Sustituye el contenido de las tablas por ``plan`` en una única transacción.
+    Replaces the content of the tables with ``plan`` in a single transaction.
 
     Returns
     -------
     dict[str, int]
-        Filas insertadas por tabla.
+        Rows inserted per table.
     """
     with connection.transaction(), connection.cursor() as cursor:
         cursor.execute(truncate_statement())
@@ -212,76 +216,78 @@ def execute_plan(connection: _Connection, plan: Sequence[TableLoad], srid: int) 
                 continue
 
             total = len(load.rows)
-            LOGGER.info("Insertando %s filas en %s.%s...", f"{total:,}", SCHEMA, load.table)
+            LOGGER.info("Inserting %s rows into %s.%s...", f"{total:,}", SCHEMA, load.table)
             statement = insert_statement(load, srid)
             for start in range(0, total, INSERT_CHUNK_ROWS):
                 cursor.executemany(statement, load.rows[start : start + INSERT_CHUNK_ROWS])
                 done = min(start + INSERT_CHUNK_ROWS, total)
                 if total > INSERT_CHUNK_ROWS and done < total:
-                    LOGGER.info("  %s: %s de %s filas", load.table, f"{done:,}", f"{total:,}")
+                    LOGGER.info("  %s: %s of %s rows", load.table, f"{done:,}", f"{total:,}")
 
     return {load.table: len(load.rows) for load in plan}
 
 
 def load_to_postgres(tables: PipelineTables, config: PipelineConfig) -> bool:
     """
-    Inserta las tablas del pipeline en PostGIS si ``database.enabled``.
+    Inserts the pipeline tables into PostGIS if ``database.enabled``.
 
-    Cualquier error (sin driver, sin conexión, fallo de SQL) se registra y se devuelve
-    ``False``: los GeoParquet ya están escritos y sirven de respaldo.
+    Any error (no driver, no connection, SQL failure) is logged and ``False`` is returned: the
+    GeoParquet files are already written and serve as a backup.
 
     Parameters
     ----------
     tables : PipelineTables
-        Resultado del pipeline.
+        Pipeline result.
     config : PipelineConfig
-        Configuración (``database`` y CRS de almacenamiento).
+        Configuration (``database`` and storage CRS).
 
     Returns
     -------
     bool
-        ``True`` si la carga se completó.
+        ``True`` if the load completed.
     """
     if not config.database.enabled:
         return False
 
     url = config.database.url
     if not url:
-        LOGGER.error("database.enabled sin database.url: define la URL en la configuración.")
+        LOGGER.error("database.enabled without database.url: set the URL in the configuration.")
         return False
 
     try:
         import psycopg
     except ImportError:
-        LOGGER.error("Falta el driver: pip install 'psycopg[binary]'. Se omite la carga.")
+        LOGGER.error("Missing driver: pip install 'psycopg[binary]'. Skipping the load.")
         return False
 
     srid = CRS.from_user_input(config.geometry.storage_crs).to_epsg()
     try:
-        LOGGER.info("PostGIS: preparando las filas (convierte geometrías; puede tardar)...")
+        LOGGER.info(
+            "PostGIS: preparing the rows (converting geometries; this may take a while)..."
+        )
         plan = build_load_plan(tables, config.geometry.storage_crs)
-        LOGGER.info("PostGIS: conectando a %s...", describe_url(url))
+        LOGGER.info("PostGIS: connecting to %s...", describe_url(url))
         with psycopg.connect(url, connect_timeout=CONNECT_TIMEOUT_S) as connection:
             if config.database.apply_schema:
-                LOGGER.info("PostGIS: aplicando el esquema (crea las tablas que falten)...")
+                LOGGER.info("PostGIS: applying the schema (creates any missing tables)...")
                 apply_schema(connection)
 
             counts = execute_plan(connection, plan, srid)
-    except Exception as error:  # límite del sistema: el GeoParquet es el respaldo
+    except Exception as error:  # system boundary: the GeoParquet is the backup
         LOGGER.error(
-            "No se pudo cargar en PostGIS (%s): %s. Los GeoParquet sí se han escrito.",
+            "Could not load into PostGIS (%s): %s. The GeoParquet files were written.",
             describe_url(url),
             error,
         )
         return False
 
-    LOGGER.info("Cargado en PostGIS (%s): %s", describe_url(url), counts)
+    LOGGER.info("Loaded into PostGIS (%s): %s", describe_url(url), counts)
 
     return True
 
 
 def iter_statements(plan: Sequence[TableLoad], srid: int) -> Iterator[str]:
-    """Sentencias que ejecutaría la carga, en orden (útil para depurar)."""
+    """Statements the load would run, in order (useful for debugging)."""
     yield truncate_statement()
     for load in plan:
         yield insert_statement(load, srid)

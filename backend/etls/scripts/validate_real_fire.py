@@ -1,18 +1,18 @@
 """
-Validación visual del pipeline sobre un incendio real.
+Visual validation of the pipeline on a real fire.
 
-Ejecuta el pipeline sobre CSV FIRMS locales (MODIS y VIIRS del MISMO periodo), muestra un
-resumen (detecciones, observaciones, eventos, confianza) y guarda un mapa PNG para revisión.
+Runs the pipeline on local FIRMS CSV files (MODIS and VIIRS of the SAME period), shows a
+summary (detections, observations, events, confidence) and saves a PNG map for review.
 
-Mientras no exista la ingesta por API, los datos se descargan a mano desde el archivo de
-FIRMS (https://firms.modaps.eosdis.nasa.gov/download/). Incendio de referencia sugerido:
-Sierra de la Culebra (Zamora), 15-25 de junio de 2022 (``PRESET = "culebra-2022"``).
+While there is no API ingestion, the data is downloaded by hand from the FIRMS archive
+(https://firms.modaps.eosdis.nasa.gov/download/). Suggested reference fire:
+Sierra de la Culebra (Zamora), June 15-25, 2022 (``PRESET = "culebra-2022"``).
 
-Por defecto usa los ficheros de muestra de ``backend/etls/data/sample`` (MODIS de septiembre
-y VIIRS de noviembre de 2026: no se solapan en el tiempo, así que sirven para probar el flujo
-pero no mostrarán fusión MODIS + VIIRS).
+By default it uses the sample files in ``backend/etls/data/sample`` (MODIS from September and
+VIIRS from November 2026: they do not overlap in time, so they are useful to test the flow
+but will not show MODIS + VIIRS fusion).
 
-Edita las constantes de la sección "Parámetros" y ejecuta ``python scripts/validate_real_fire.py``.
+Edit the constants of the "Parameters" section and run ``python scripts/validate_real_fire.py``.
 """
 
 from __future__ import annotations
@@ -28,21 +28,22 @@ from matplotlib.patches import Patch
 from _paths import ETLS_DIR, SAMPLE_DIR
 
 from fire_etl.config import AreaOfInterestConfig, PipelineConfig, load_config
-from fire_etl.ingest import read_firms_csv
-from fire_etl.outputs import PipelineTables, to_storage_crs
+from fire_etl.extract.firms.reader import read_firms_csv
+from fire_etl.load.geoparquet import to_storage_crs
 from fire_etl.pipeline import run_frames
+from fire_etl.transform.tables import PipelineTables
 
 DEFAULT_MODIS = SAMPLE_DIR / "MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt"
 DEFAULT_VIIRS = SAMPLE_DIR / "J1_VIIRS_C2_Europe_VJ114IMGTDL_NRT_2026318_sample.txt"
 
-# Áreas de interés de incendios conocidos (min_lon, min_lat, max_lon, max_lat).
+# Areas of interest of known fires (min_lon, min_lat, max_lon, max_lat).
 PRESETS = {
     "culebra-2022": (-6.60, 41.80, -5.90, 42.15),
     "sierra-bermeja-2021": (-5.35, 36.45, -5.05, 36.65),
     "tenerife-2023": (-16.65, 28.25, -16.30, 28.50),
 }
 
-# Paleta categórica validada (slots 1 y 2) y tinta neutra para envolventes.
+# Validated categorical palette (slots 1 and 2) and neutral ink for envelopes.
 COLOR_VIIRS = "#2a78d6"
 COLOR_MODIS = "#eb6834"
 COLOR_HULL = "#3d3d3a"
@@ -50,11 +51,11 @@ COLOR_TEXT_MUTED = "#6b6a64"
 TOP_EVENTS_LABELLED = 5
 
 
-# --- Parámetros: edítalos aquí ------------------------------------------------------------
-MODIS_FILE = DEFAULT_MODIS  # CSV de MODIS del incendio (mismo periodo que VIIRS)
-VIIRS_FILE = DEFAULT_VIIRS  # CSV de VIIRS del incendio
+# --- Parameters: edit them here -----------------------------------------------------------
+MODIS_FILE = DEFAULT_MODIS  # MODIS CSV of the fire (same period as VIIRS)
+VIIRS_FILE = DEFAULT_VIIRS  # VIIRS CSV of the fire
 PRESET: str | None = None  # "culebra-2022", "sierra-bermeja-2021", "tenerife-2023" o None
-FOCUS_LARGEST = False  # True: el mapa se encuadra en el evento mayor
+FOCUS_LARGEST = False  # True: the map is framed on the largest event
 CONFIG_FILE = ETLS_DIR / "config" / "default.yaml"
 OUTPUT_DIR = ETLS_DIR / "output" / "validation"
 
@@ -74,15 +75,15 @@ def print_summary(tables: PipelineTables) -> None:
     observations = tables.observations
     events = tables.events
 
-    print("\n=== Resumen de validación ===")
-    print(f"CRS métrico: {tables.run_parameters['metric_crs_resolved']}")
-    print(f"Detecciones: {counts['detections']}  {detections['source'].value_counts().to_dict()}")
-    print(f"Descartadas: {counts['discarded']}")
-    print(f"Observaciones: {counts['observations']}")
-    print(f"  por sensores: {observations['sensors'].value_counts().to_dict()}")
-    print(f"  confianza fusionada: {observations['confidence_fused'].value_counts().to_dict()}")
-    print(f"  low aisladas: {int(observations['is_isolated_low'].sum())}")
-    print(f"Eventos: {counts['fire_events']}  (fusiones: {counts['event_merges']})")
+    print("\n=== Validation summary ===")
+    print(f"Metric CRS: {tables.run_parameters['metric_crs_resolved']}")
+    print(f"Detections: {counts['detections']}  {detections['source'].value_counts().to_dict()}")
+    print(f"Discarded: {counts['discarded']}")
+    print(f"Observations: {counts['observations']}")
+    print(f"  by sensors: {observations['sensors'].value_counts().to_dict()}")
+    print(f"  fused confidence: {observations['confidence_fused'].value_counts().to_dict()}")
+    print(f"  isolated low: {int(observations['is_isolated_low'].sum())}")
+    print(f"Events: {counts['fire_events']}  (merges: {counts['event_merges']})")
 
     if not events.empty:
         top = events.sort_values("n_detections", ascending=False).head(TOP_EVENTS_LABELLED)
@@ -96,12 +97,12 @@ def print_summary(tables: PipelineTables) -> None:
             "frp_max",
             "confidence_fused",
         ]
-        print("\nEventos principales:")
+        print("\nMain events:")
         print(top[columns].to_string(index=False))
 
     print(
-        "\nNota: hull_area_m2 / footprint_area_m2 son la huella de los píxeles + buffer, "
-        "NO superficie quemada."
+        "\nNote: hull_area_m2 / footprint_area_m2 are the pixel footprint + buffer, "
+        "NOT burned area."
     )
 
 
@@ -137,12 +138,12 @@ def plot_map(tables: PipelineTables, storage_crs: str, path: Path, focus_largest
     legend = [
         Patch(facecolor=COLOR_MODIS, alpha=0.45, label="Footprint MODIS"),
         Patch(facecolor=COLOR_VIIRS, alpha=0.45, label="Footprint VIIRS"),
-        Line2D([0], [0], color=COLOR_HULL, linewidth=2, label="Envolvente de evento"),
+        Line2D([0], [0], color=COLOR_HULL, linewidth=2, label="Event envelope"),
     ]
     axis.legend(handles=legend, loc="upper left", frameon=False, fontsize=9)
-    axis.set_title("Detecciones FIRMS fusionadas en eventos", loc="left", fontsize=12)
-    axis.set_xlabel("Longitud", color=COLOR_TEXT_MUTED)
-    axis.set_ylabel("Latitud", color=COLOR_TEXT_MUTED)
+    axis.set_title("FIRMS detections merged into events", loc="left", fontsize=12)
+    axis.set_xlabel("Longitude", color=COLOR_TEXT_MUTED)
+    axis.set_ylabel("Latitude", color=COLOR_TEXT_MUTED)
     axis.grid(color="#e4e3dd", linewidth=0.5)
     axis.set_axisbelow(True)
     for spine in axis.spines.values():
@@ -164,7 +165,7 @@ def main() -> None:
 
     map_path = OUTPUT_DIR / "validation_map.png"
     plot_map(tables, config.geometry.storage_crs, map_path, FOCUS_LARGEST)
-    print(f"\nMapa guardado en {map_path}")
+    print(f"\nMap saved to {map_path}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Tests del enriquecimiento de cobertura del suelo con SIGPAC (capas sintéticas, sin red)."""
+"""Tests of the land cover enrichment with SIGPAC (synthetic layers, no network)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import box
 
-from fire_etl.sigpac_land_cover import (
+from fire_etl.transform.sigpac_land_cover import (
     LandCoverError,
     enrich,
     normalize_sigpac_use,
@@ -15,10 +15,10 @@ from fire_etl.sigpac_land_cover import (
 )
 
 POINT_TA = (40.0000, -3.7000)  # recinto TA (GPKG, EPSG:25830)
-POINT_TWO_RECINTOS = (40.0005, -3.7000)  # dentro de TA y de un recinto PS solapado
-POINT_UNKNOWN = (40.0100, -3.7000)  # recinto con código "XX" (shapefile, EPSG:25829)
-POINT_NO_RECINTO = (40.0500, -3.7000)  # fuera de todos los recintos
-POINT_INVALID = (95.0, -3.7)  # latitud fuera de rango
+POINT_TWO_RECINTOS = (40.0005, -3.7000)  # inside TA and an overlapping PS parcel
+POINT_UNKNOWN = (40.0100, -3.7000)  # parcel with code "XX" (shapefile, EPSG:25829)
+POINT_NO_RECINTO = (40.0500, -3.7000)  # outside all the parcels
+POINT_INVALID = (95.0, -3.7)  # latitude out of range
 
 
 @pytest.mark.parametrize(
@@ -43,7 +43,7 @@ def _square(lat: float, lon: float, half_deg: float):
 
 @pytest.fixture
 def sigpac_dir(tmp_path):
-    """Dos capas con CRS distintos: GPKG en EPSG:25830 y shapefile en EPSG:25829."""
+    """Two layers with different CRS: GPKG in EPSG:25830 and shapefile in EPSG:25829."""
     folder = tmp_path / "sigpac"
     folder.mkdir()
 
@@ -88,7 +88,7 @@ def test_enrich_known_coordinates_with_sigpac(sigpac_dir):
     assert bool(rows.loc[1, "is_agricultural"]) and not bool(rows.loc[1, "is_forest"])
     assert rows.loc[1, "land_cover_source"] == "sigpac"
     assert rows.loc[2, ["land_cover", "sigpac_use"]].tolist() == ["other", "XX"]
-    for empty in (3, 4):  # sin recinto / coordenadas inválidas: campos vacíos, sin fallar
+    for empty in (3, 4):  # without parcel / invalid coordinates: empty fields, without failing
         assert rows.loc[empty, ["land_cover", "land_cover_source", "sigpac_use"]].isna().all()
         assert pd.isna(rows.loc[empty, "land_cover_confidence"])
         assert rows.loc[empty, ["is_agricultural", "is_forest"]].isna().all()
@@ -129,7 +129,7 @@ def test_enrich_empty_sigpac_folder_leaves_fields_empty(tmp_path, caplog):
 
     assert pd.isna(enriched.loc[0, "land_cover"])
     assert summary.no_data == 1 and summary.sigpac == 0
-    assert "no hay capas" in caplog.text
+    assert "no layers" in caplog.text
 
 
 def test_enrich_point_between_forest_and_crops_flags_both(tmp_path):
@@ -140,7 +140,7 @@ def test_enrich_point_between_forest_and_crops_flags_both(tmp_path):
         geometry=[_square(*POINT_TA, 0.002), _square(*POINT_TA, 0.001)],
         crs=4326,
     ).to_crs(25830)
-    recintos.to_file(folder / "mixto.gpkg", layer="mixto", driver="GPKG")
+    recintos.to_file(folder / "mixed.gpkg", layer="mixed", driver="GPKG")
     df = pd.DataFrame({"id": [1], "lat": [POINT_TA[0]], "lon": [POINT_TA[1]]})
 
     enriched, summary = enrich(df, folder)

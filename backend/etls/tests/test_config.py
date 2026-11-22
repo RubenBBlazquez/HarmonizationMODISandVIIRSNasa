@@ -1,4 +1,4 @@
-"""Tests de carga y validación de la configuración."""
+"""Tests of configuration loading and validation."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from fire_etl.config import (
     config_from_dict,
     load_config,
 )
-from fire_etl.geometry import area_of_interest_geometry
+from fire_etl.transform.processing.geometry import area_of_interest_geometry
 
 DEFAULT_YAML = Path(__file__).resolve().parents[1] / "config" / "default.yaml"
 
@@ -49,9 +49,9 @@ def test_default_yaml_matches_dataclass_defaults_except_spain_area():
         (39.57, 2.65, True),  # Palma
         (28.46, -16.25, True),  # Santa Cruz de Tenerife
         (35.29, -2.94, True),  # Melilla
-        (48.86, 2.35, False),  # París
-        (51.50, -0.12, False),  # Londres
-        (41.90, 12.50, False),  # Roma
+        (48.86, 2.35, False),  # Paris
+        (51.50, -0.12, False),  # London
+        (41.90, 12.50, False),  # Rome
         (34.02, -6.84, False),  # Rabat
     ],
 )
@@ -68,8 +68,8 @@ def test_default_yaml_defines_the_la_palma_eruption_exclusion_zone():
     zone = zones[0]
     assert zone.reason == "volcanic_eruption"
     assert (zone.start, zone.end) == (date(2021, 9, 19), date(2021, 12, 31))
-    # El volcán (28,617 N, 17,889 O) queda dentro; el incendio forestal de La Palma de 2023
-    # (28,8 N) y la península quedan fuera.
+    # The volcano (28.617 N, 17.889 W) is inside; the 2023 La Palma forest fire
+    # (28.8 N) and the peninsula are outside.
     min_lon, min_lat, max_lon, max_lat = zone.bbox
     assert min_lon <= -17.889 <= max_lon and min_lat <= 28.617 <= max_lat
     assert not (min_lat <= 28.8 <= max_lat)

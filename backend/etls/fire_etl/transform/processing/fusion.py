@@ -1,10 +1,10 @@
 """
-Agrupación de detecciones en observaciones dentro de cada ventana temporal.
+Grouping of detections into observations within each time window.
 
-Dos detecciones de la misma ventana están conectadas si sus footprints intersectan; cada
-componente conexa del grafo resultante es una **observación**. La detección representativa se
-elige después de agrupar, priorizando VIIRS (375 m) sobre MODIS (1 km), sin descartar las
-detecciones MODIS del grupo.
+Two detections of the same window are connected if their footprints intersect; each connected
+component of the resulting graph is an **observation**. The representative detection is chosen
+after grouping, prioritizing VIIRS (375 m) over MODIS (1 km), without discarding the MODIS
+detections of the group.
 """
 
 from __future__ import annotations
@@ -16,17 +16,17 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from fire_etl.confidence import LEVEL_RANK, ConfidenceLevel, fuse_confidence
 from fire_etl.config import ConfidenceConfig, WindowMode
-from fire_etl.graph import component_labels, self_join_pairs
-from fire_etl.ingest import Source
+from fire_etl.extract.firms.reader import Source
+from fire_etl.transform.processing.confidence import LEVEL_RANK, ConfidenceLevel, fuse_confidence
+from fire_etl.transform.processing.graph import component_labels, self_join_pairs
 
 EPOCH = pd.Timestamp("1970-01-01", tz="UTC")
 FIXED_WINDOW_LENGTH = {
     WindowMode.DAY_UTC: pd.Timedelta(days=1),
     WindowMode.HOURS_12: pd.Timedelta(hours=12),
 }
-# Menor valor = mayor prioridad como detección representativa.
+# Lower value = higher priority as representative detection.
 SOURCE_PRIORITY = {Source.VIIRS.value: 0, Source.MODIS.value: 1}
 RANK_TO_LEVEL = {rank: level.value for level, rank in LEVEL_RANK.items()}
 ID_LENGTH = 16
@@ -64,14 +64,14 @@ OBSERVATION_COLUMNS = (
 @dataclass(frozen=True)
 class ObservationResult:
     """
-    Resultado de la agrupación.
+    Result of the grouping.
 
     Attributes
     ----------
     detections : gpd.GeoDataFrame
-        Detecciones con columnas de ventana, ``observation_id`` e ``is_representative``.
+        Detections with window columns, ``observation_id`` and ``is_representative``.
     observations : gpd.GeoDataFrame
-        Una fila por observación (``OBSERVATION_COLUMNS``), geometría activa ``geom_hull``.
+        One row per observation (``OBSERVATION_COLUMNS``), active geometry ``geom_hull``.
     """
 
     detections: gpd.GeoDataFrame
@@ -79,7 +79,7 @@ class ObservationResult:
 
 
 def short_hash(*parts: str) -> str:
-    """Hash SHA-1 truncado y determinista de las partes dadas."""
+    """Deterministic truncated SHA-1 hash of the given parts."""
     digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
 
     return digest[:ID_LENGTH]
@@ -87,28 +87,28 @@ def short_hash(*parts: str) -> str:
 
 def assign_time_windows(detections: pd.DataFrame, mode: WindowMode) -> pd.DataFrame:
     """
-    Asigna a cada detección su ventana temporal.
+    Assigns each detection its time window.
 
-    - ``day_utc`` / ``hours_12``: ventanas fijas alineadas a la época Unix en UTC. El índice
-      de ventana es absoluto, así que dos ventanas son consecutivas si sus índices difieren en 1.
-    - ``date_daynight``: ventana = ``acq_date`` UTC + ``daynight``. Inicio y fin son la primera y
-      la última adquisición observadas. El índice también es absoluto: ``2 * día`` para ``N`` y
-      ``2 * día + 1`` para ``D``, de modo que N(d), D(d) y N(d+1) son consecutivas y los huecos
-      sin datos no acercan ventanas lejanas. Limitación: en España una fecha ``N`` agrupa pasadas
-      de madrugada (~01-03 UTC) y de noche (~19-22 UTC) del mismo día UTC, así que las de la
-      noche de ``d`` solo se enlazan con N(d+1) a través de D(d).
+    - ``day_utc`` / ``hours_12``: fixed windows aligned to the Unix epoch in UTC. The window
+      index is absolute, so two windows are consecutive if their indices differ by 1.
+    - ``date_daynight``: window = UTC ``acq_date`` + ``daynight``. Start and end are the first and
+      last observed acquisitions. The index is also absolute: ``2 * day`` for ``N`` and
+      ``2 * day + 1`` for ``D``, so that N(d), D(d) and N(d+1) are consecutive and gaps
+      without data do not bring distant windows closer. Limitation: in Spain an ``N`` date groups
+      early-morning passes (~01-03 UTC) and night passes (~19-22 UTC) of the same UTC day, so
+      those of the night of ``d`` only link with N(d+1) through D(d).
 
     Parameters
     ----------
     detections : pd.DataFrame
-        Detecciones con ``acq_datetime``, ``acq_date`` y ``daynight``.
+        Detections with ``acq_datetime``, ``acq_date`` and ``daynight``.
     mode : WindowMode
-        Modo de partición.
+        Partitioning mode.
 
     Returns
     -------
     pd.DataFrame
-        Copia con ``window_key``, ``window_index``, ``window_start`` y ``window_end``.
+        Copy with ``window_key``, ``window_index``, ``window_start`` and ``window_end``.
     """
     windowed = detections.copy()
     times = windowed["acq_datetime"]
@@ -137,19 +137,19 @@ def assign_time_windows(detections: pd.DataFrame, mode: WindowMode) -> pd.DataFr
 
 def label_observations(windowed: gpd.GeoDataFrame) -> np.ndarray:
     """
-    Etiqueta las observaciones: componentes conexas de footprints que intersectan en la misma
-    ventana. Se hace un ``sjoin`` por ventana (no uno global) para no generar pares entre
-    detecciones de ventanas distintas, que crecerían cuadráticamente en incendios largos.
+    Labels the observations: connected components of footprints that intersect in the same
+    window. One ``sjoin`` is done per window (not a global one) so as not to generate pairs between
+    detections of different windows, which would grow quadratically in long fires.
 
     Parameters
     ----------
     windowed : gpd.GeoDataFrame
-        Detecciones con ``window_key`` y geometría activa ``geom_footprint`` (CRS métrico).
+        Detections with ``window_key`` and active geometry ``geom_footprint`` (metric CRS).
 
     Returns
     -------
     np.ndarray
-        Etiqueta de observación por fila (posicional).
+        Observation label per row (positional).
     """
     footprints = windowed.geometry
     positions = pd.Series(np.arange(len(windowed)))
@@ -229,19 +229,19 @@ def build_observations(
     windowed: gpd.GeoDataFrame, confidence: ConfidenceConfig
 ) -> ObservationResult:
     """
-    Agrupa las detecciones en observaciones y calcula sus atributos.
+    Groups the detections into observations and computes their attributes.
 
     Parameters
     ----------
     windowed : gpd.GeoDataFrame
-        Salida de :func:`assign_time_windows` sobre las detecciones geolocalizadas.
+        Output of :func:`assign_time_windows` on the geolocated detections.
     confidence : ConfidenceConfig
-        Reglas de fusión de la confianza.
+        Confidence fusion rules.
 
     Returns
     -------
     ObservationResult
-        Detecciones etiquetadas y tabla de observaciones.
+        Labeled detections and observations table.
     """
     detections = windowed.reset_index(drop=True).copy()
     detections["_label"] = label_observations(detections)
@@ -278,8 +278,8 @@ def build_observations(
     observations = observations.join(levels).join(_fused_columns(levels, confidence))
     observations = observations.join(_representatives(detections))
 
-    # Las operaciones geométricas se hacen sobre GeoSeries: una columna extraída de un DataFrame
-    # normal es una Series sin ``.area``.
+    # Geometric operations are done on GeoSeries: a column extracted from a plain DataFrame
+    # is a Series without ``.area``.
     union = detections[["_label", "geom_footprint"]].dissolve(by="_label").geometry
     hulls = union.convex_hull
     observations["footprint_area_m2"] = union.area

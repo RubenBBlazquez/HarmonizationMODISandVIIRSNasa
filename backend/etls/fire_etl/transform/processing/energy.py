@@ -1,21 +1,22 @@
 """
-Energía radiada y biomasa quemada estimadas de cada evento, a partir de sus pasadas de satélite.
+Estimated radiated energy and burned biomass of each event, from its satellite passes.
 
-El FRP (MW = MJ/s) es la potencia del fuego en el instante de la pasada. Para pasar a energía
-(FRE, MJ) hay que integrarlo en el tiempo, pero los satélites solo ven el fuego unas pocas veces al
-día. Se usa una aproximación sencilla y explícita:
+FRP (MW = MJ/s) is the power of the fire at the instant of the pass. To get to energy (FRE, MJ)
+it has to be integrated over time, but satellites only see the fire a few times a day. A simple
+and explicit approximation is used:
 
-1. Las detecciones de un evento separadas menos de ``pass_gap_minutes`` son una **pasada**.
-2. El FRP de la pasada es la suma de sus detecciones; si MODIS y VIIRS vieron el mismo fuego en la
-   misma pasada se toma el **mayor de los dos sensores** (no se suman, para no contar dos veces).
-3. Cada pasada representa un intervalo de hasta ``pass_window_hours`` horas centrado en ella; entre
-   dos pasadas cercanas el intervalo se reparte por la mitad. Una pasada aislada representa la
-   ventana completa.
-4. FRE = suma de FRP(pasada) x horas(pasada) x 3600; biomasa quemada = FRE x coeficiente (kg/MJ).
+1. The detections of an event closer together than ``pass_gap_minutes`` form a **pass**.
+2. The FRP of the pass is the sum of its detections; if MODIS and VIIRS saw the same fire in the
+   same pass the **larger of the two sensors** is taken (they are not added, to avoid counting
+   twice).
+3. Each pass represents an interval of up to ``pass_window_hours`` hours centered on it; between
+   two close passes the interval is split in half. An isolated pass represents the full
+   window.
+4. FRE = sum of FRP(pass) x hours(pass) x 3600; burned biomass = FRE x coefficient (kg/MJ).
 
-Es una **estimación**: supone el FRP constante dentro de cada ventana, ignora el ciclo diario del
-fuego y no ve lo que los satélites no detectan (fuegos pequeños, nubes, humo), así que sirve para
-comparar incendios, no como medida exacta.
+It is an **estimate**: it assumes constant FRP within each window, ignores the daily cycle of
+the fire and does not see what the satellites do not detect (small fires, clouds, smoke), so it
+is useful to compare fires, not as an exact measure.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ ENERGY_COLUMNS = ("n_passes", "max_pass_gap_hours", "fre_mj", "biomass_burned_kg
 
 
 def _passes(detections: pd.DataFrame, gap: pd.Timedelta) -> pd.DataFrame:
-    """Una fila por pasada: evento, instante (el primero) y FRP de la pasada (MW)."""
+    """One row per pass: event, instant (the first) and FRP of the pass (MW)."""
     ordered = detections.loc[:, ["event_id", "acq_datetime", "source", "frp"]].sort_values(
         ["event_id", "acq_datetime"], kind="stable", ignore_index=True
     )
@@ -48,20 +49,20 @@ def _passes(detections: pd.DataFrame, gap: pd.Timedelta) -> pd.DataFrame:
 
 def event_energy(detections: pd.DataFrame, config: BiomassConfig) -> pd.DataFrame:
     """
-    Pasadas, energía radiada y biomasa quemada estimada de cada evento.
+    Passes, radiated energy and estimated burned biomass of each event.
 
     Parameters
     ----------
     detections : pd.DataFrame
-        Detecciones de los eventos con ``event_id``, ``acq_datetime``, ``source`` y ``frp``.
+        Detections of the events with ``event_id``, ``acq_datetime``, ``source`` and ``frp``.
     config : BiomassConfig
-        Coeficiente (kg/MJ) y parámetros de pasada y ventana.
+        Coefficient (kg/MJ) and pass and window parameters.
 
     Returns
     -------
     pd.DataFrame
-        Indexado por ``event_id``: ``n_passes``, ``max_pass_gap_hours`` (mayor hueco entre
-        pasadas; 0 si solo hay una), ``fre_mj`` y ``biomass_burned_kg``.
+        Indexed by ``event_id``: ``n_passes``, ``max_pass_gap_hours`` (largest gap between
+        passes; 0 if there is only one), ``fre_mj`` and ``biomass_burned_kg``.
     """
     if detections.empty:
         return pd.DataFrame(
@@ -74,7 +75,7 @@ def event_energy(detections: pd.DataFrame, config: BiomassConfig) -> pd.DataFram
     gap_next = (-by_event.diff(-1)).dt.total_seconds() / SECONDS_PER_HOUR
 
     half = config.pass_window_hours / 2
-    left = (gap_previous / 2).clip(upper=half).fillna(half)  # sin pasada anterior: media ventana
+    left = (gap_previous / 2).clip(upper=half).fillna(half)  # no previous pass: half a window
     right = (gap_next / 2).clip(upper=half).fillna(half)
     passes["fre_mj"] = passes["frp_pass"] * (left + right) * SECONDS_PER_HOUR
 

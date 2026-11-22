@@ -1,15 +1,15 @@
 """
-Geometrías de las detecciones: puntos, filtro por área de interés y footprints.
+Detection geometries: points, area-of-interest filter and footprints.
 
-Todos los cálculos de distancia y área se hacen en un CRS métrico (EPSG:25830 por defecto, o
-UTM); nunca en grados. Las geometrías se almacenan después en EPSG:4326 (ver
-:mod:`fire_etl.outputs`).
+All distance and area calculations are done in a metric CRS (EPSG:25830 by default, or UTM);
+never in degrees. Geometries are stored afterwards in EPSG:4326 (see
+:mod:`fire_etl.load.geoparquet`).
 
-Limitación conocida del footprint: se aproxima como un rectángulo alineado a los ejes del CRS
-métrico, de ``area_width_km`` en X por ``area_height_km`` en Y (km, genéricos: no dependen del
-sensor) y centrado en el punto. No considera la inclinación real de la órbita, el solape
-*bow-tie* ni la función de dispersión del píxel; el buffer configurable absorbe parte de ese
-error y del de geolocalización.
+Known limitation of the footprint: it is approximated as a rectangle aligned with the axes of
+the metric CRS, of ``area_width_km`` in X by ``area_height_km`` in Y (km, generic: they do not
+depend on the sensor) and centered on the point. It does not consider the real inclination of
+the orbit, the *bow-tie* overlap or the pixel point spread function; the configurable buffer
+absorbs part of that error and of the geolocation error.
 """
 
 from __future__ import annotations
@@ -29,23 +29,23 @@ UTM_ZONE_WIDTH_DEG = 6.0
 
 
 class MetricCrsError(ValueError):
-    """El CRS configurado para los cálculos no es métrico."""
+    """The CRS configured for the calculations is not metric."""
 
 
 @dataclass(frozen=True)
 class DetectionGeometries:
     """
-    Detecciones con geometría en el CRS métrico.
+    Detections with geometry in the metric CRS.
 
     Attributes
     ----------
     detections : gpd.GeoDataFrame
-        Detecciones dentro del área de interés con ``geom_point``, ``geom_footprint`` (activa) y
+        Detections inside the area of interest with ``geom_point``, ``geom_footprint`` (active) and
         ``footprint_area_m2``.
     metric_crs : CRS
-        CRS métrico usado en los cálculos.
+        Metric CRS used in the calculations.
     outside_aoi : int
-        Detecciones descartadas por quedar fuera del área de interés.
+        Detections discarded for being outside the area of interest.
     """
 
     detections: gpd.GeoDataFrame
@@ -55,17 +55,17 @@ class DetectionGeometries:
 
 def area_of_interest_geometry(aoi: AreaOfInterestConfig) -> shapely.Geometry | None:
     """
-    Construye la geometría del área de interés en EPSG:4326.
+    Builds the geometry of the area of interest in EPSG:4326.
 
     Parameters
     ----------
     aoi : AreaOfInterestConfig
-        Área configurada.
+        Configured area.
 
     Returns
     -------
     shapely.Geometry | None
-        Polígono del área o ``None`` si no hay filtro.
+        Polygon of the area, or ``None`` if there is no filter.
     """
     if aoi.bbox is not None:
         return shapely.box(*aoi.bbox)
@@ -78,19 +78,19 @@ def area_of_interest_geometry(aoi: AreaOfInterestConfig) -> shapely.Geometry | N
 
 def utm_crs_for_lon_lat(lon: float, lat: float) -> CRS:
     """
-    Devuelve el CRS UTM (WGS84) de la zona que contiene ``(lon, lat)``.
+    Returns the UTM CRS (WGS84) of the zone containing ``(lon, lat)``.
 
     Parameters
     ----------
     lon : float
-        Longitud en grados.
+        Longitude in degrees.
     lat : float
-        Latitud en grados.
+        Latitude in degrees.
 
     Returns
     -------
     CRS
-        EPSG:326xx (hemisferio norte) o EPSG:327xx (hemisferio sur).
+        EPSG:326xx (northern hemisphere) or EPSG:327xx (southern hemisphere).
     """
     zone = int(np.floor((lon + 180.0) / UTM_ZONE_WIDTH_DEG)) % 60 + 1
     base = 32600 if lat >= 0 else 32700
@@ -100,29 +100,29 @@ def utm_crs_for_lon_lat(lon: float, lat: float) -> CRS:
 
 def resolve_metric_crs(spec: str, reference: shapely.Geometry | None) -> CRS:
     """
-    Resuelve el CRS métrico de cálculo.
+    Resolves the metric CRS used for calculations.
 
     Parameters
     ----------
     spec : str
-        Código de CRS (p. ej. ``EPSG:25830``) o ``auto`` para la zona UTM del centro de
+        CRS code (e.g. ``EPSG:25830``) or ``auto`` for the UTM zone of the center of
         ``reference``.
     reference : shapely.Geometry | None
-        Geometría en EPSG:4326 (área de interés o envolvente de los datos) usada en ``auto``.
+        Geometry in EPSG:4326 (area of interest or envelope of the data) used in ``auto``.
 
     Returns
     -------
     CRS
-        CRS proyectado en metros.
+        Projected CRS in meters.
 
     Raises
     ------
     MetricCrsError
-        Si el CRS no es proyectado en metros o ``auto`` no tiene referencia.
+        If the CRS is not projected in meters or ``auto`` has no reference.
     """
     if spec.lower() == "auto":
         if reference is None or reference.is_empty:
-            raise MetricCrsError("metric_crs=auto necesita área de interés o datos")
+            raise MetricCrsError("metric_crs=auto needs an area of interest or data")
 
         center = reference.centroid
         crs = utm_crs_for_lon_lat(center.x, center.y)
@@ -131,7 +131,7 @@ def resolve_metric_crs(spec: str, reference: shapely.Geometry | None) -> CRS:
 
     units = {axis.unit_name for axis in crs.axis_info}
     if not crs.is_projected or units != {"metre"}:
-        raise MetricCrsError(f"El CRS {crs.to_string()} no es proyectado en metros")
+        raise MetricCrsError(f"The CRS {crs.to_string()} is not projected in meters")
 
     return crs
 
@@ -140,24 +140,24 @@ def build_footprints(
     points: gpd.GeoSeries, width_km: pd.Series, height_km: pd.Series, buffer_m: float
 ) -> gpd.GeoSeries:
     """
-    Construye el footprint de cada detección: rectángulo ``area_width_km`` × ``area_height_km``
-    más el buffer.
+    Builds the footprint of each detection: ``area_width_km`` × ``area_height_km`` rectangle
+    plus the buffer.
 
     Parameters
     ----------
     points : gpd.GeoSeries
-        Puntos en un CRS métrico.
+        Points in a metric CRS.
     width_km : pd.Series
-        Ancho del área en km, aplicado en X.
+        Width of the area in km, applied in X.
     height_km : pd.Series
-        Alto del área en km, aplicado en Y.
+        Height of the area in km, applied in Y.
     buffer_m : float
-        Buffer en metros para absorber el error de posición.
+        Buffer in meters to absorb the position error.
 
     Returns
     -------
     gpd.GeoSeries
-        Polígonos en el mismo CRS que ``points``.
+        Polygons in the same CRS as ``points``.
     """
     x = points.x.to_numpy()
     y = points.y.to_numpy()
@@ -175,21 +175,21 @@ def build_detection_geometries(
     detections: pd.DataFrame, geometry: GeometryConfig, aoi: AreaOfInterestConfig
 ) -> DetectionGeometries:
     """
-    Crea puntos y footprints, filtra por área de interés y reproyecta al CRS métrico.
+    Creates points and footprints, filters by area of interest and reprojects to the metric CRS.
 
     Parameters
     ----------
     detections : pd.DataFrame
-        Detecciones en el esquema común (``lat``, ``lon``, ``area_width_km``...).
+        Detections in the common schema (``lat``, ``lon``, ``area_width_km``...).
     geometry : GeometryConfig
-        CRS y buffer.
+        CRS and buffer.
     aoi : AreaOfInterestConfig
-        Área de interés.
+        Area of interest.
 
     Returns
     -------
     DetectionGeometries
-        Detecciones geolocalizadas en el CRS métrico.
+        Geolocated detections in the metric CRS.
     """
     points = gpd.GeoSeries(
         gpd.points_from_xy(detections["lon"], detections["lat"]),

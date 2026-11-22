@@ -1,7 +1,12 @@
 """
-Orquestación del pipeline: ingesta -> geometrías -> observaciones -> eventos -> salidas.
+ETL orchestration: extract -> transform -> load.
 
-Uso por línea de comandos::
+- :func:`fire_etl.extract.main.extract`: reads the FIRMS CSV files and the previous state.
+- :func:`fire_etl.transform.main.transform`: standardization, geometries, observations, events
+  and final data.
+- :func:`fire_etl.load.main.load`: GeoParquet, ``clean_data`` and PostGIS.
+
+Command-line usage::
 
     python -m fire_etl.pipeline --config config/default.yaml \\
         --input data/sample/MODIS_C6_1_Europe_MCD14DL_NRT_2026258_sample.txt \\
@@ -13,169 +18,29 @@ from __future__ import annotations
 
 import argparse
 import logging
-import time
-from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 
-from fire_etl.clean_data import build_clean_data, write_clean_data
 from fire_etl.config import PipelineConfig, load_config
-from fire_etl.events import PreviousState, build_events
-from fire_etl.fusion import assign_time_windows, build_observations
-from fire_etl.geometry import build_detection_geometries
-from fire_etl.ingest import IngestResult, ingest_frames, keep_forest_detections, read_firms_csv
-from fire_etl.outputs import PipelineTables, read_previous_state, write_tables
-from fire_etl.postgres_loader import load_to_postgres
-from fire_etl.sigpac_land_cover import enrich, log_summary
-
-LOGGER = logging.getLogger(__name__)
+from fire_etl.extract.main import ExtractResult, extract
+from fire_etl.load.main import load
+from fire_etl.transform.main import transform
+from fire_etl.transform.tables import PipelineTables
 
 
-class NoDetectionsError(ValueError):
-    """No quedan detecciones válidas que procesar."""
-
-
-@contextmanager
-def log_stage(name: str) -> Iterator[None]:
-    """Registra el inicio y el fin (con el tiempo) de una etapa lenta del pipeline."""
-    LOGGER.info("Iniciando: %s...", name)
-    started = time.perf_counter()
-    yield
-    LOGGER.info("Hecho: %s (%.1f s)", name, time.perf_counter() - started)
-
-
-def merge_with_previous(new: pd.DataFrame, previous: PreviousState | None) -> pd.DataFrame:
-    """
-    Une las detecciones nuevas con las ya ingeridas, sin duplicar ``detection_id``.
-
-    Parameters
-    ----------
-    new : pd.DataFrame
-        Detecciones de esta ejecución.
-    previous : PreviousState | None
-        Estado previo.
-
-    Returns
-    -------
-    pd.DataFrame
-        Detecciones únicas ordenadas por ``acq_datetime`` y ``detection_id``.
-    """
-    if previous is None or previous.detections.empty:
-        return new
-
-    combined = pd.concat([previous.detections, new], ignore_index=True)
-    combined = combined.drop_duplicates("detection_id", keep="first")
-
-    return combined.sort_values(["acq_datetime", "detection_id"], ignore_index=True)
-
-
-def process_detections(
-    ingest: IngestResult, config: PipelineConfig, previous: PreviousState | None = None
+def _run_etl(
+    extracted: ExtractResult,
+    config: PipelineConfig,
+    output_dir: str | Path | None,
+    clean_dir: str | Path | None,
 ) -> PipelineTables:
-    """
-    Ejecuta el procesamiento completo sobre detecciones ya ingeridas (sin E/S).
+    result = transform(extracted.frames, config, extracted.previous)
+    load(result.tables, result.clean, config, output_dir, clean_dir)
 
-    Parameters
-    ----------
-    ingest : IngestResult
-        Resultado de la ingesta.
-    config : PipelineConfig
-        Configuración del pipeline.
-    previous : PreviousState | None
-        Estado previo para conservar ``event_id`` y deduplicar entre ejecuciones.
-
-    Returns
-    -------
-    PipelineTables
-        Tablas finales en el CRS métrico.
-
-    Raises
-    ------
-    NoDetectionsError
-        Si no hay detecciones válidas dentro del área de interés.
-    """
-    detections = merge_with_previous(ingest.detections, previous)
-    with log_stage(f"geometrías y filtro de zona ({len(detections):,} detecciones)"):
-        geometries = build_detection_geometries(
-            detections, config.geometry, config.area_of_interest
-        )
-
-    if geometries.detections.empty:
-        raise NoDetectionsError("No hay detecciones válidas dentro del área de interés")
-
-    located = geometries.detections
-    land_cover_cfg = config.land_cover
-    database_url = config.database.url if land_cover_cfg.use_database else None
-    if database_url or land_cover_cfg.sigpac_dir:
-        located, land_cover_summary = enrich(
-            located,
-            Path(land_cover_cfg.sigpac_dir) if land_cover_cfg.sigpac_dir else None,
-            database_url=database_url,
-            sigpac_confidence=config.land_cover.sigpac_confidence,
-            min_confidence=config.land_cover.min_confidence,
-        )
-        log_summary(land_cover_summary)
-    else:
-        LOGGER.warning(
-            "Cobertura del suelo desactivada (land_cover.sigpac_dir sin definir): land_cover, "
-            "land_cover_confidence, sigpac_use, is_agricultural e is_forest saldrán vacíos."
-        )
-
-    located, forest_kept = keep_forest_detections(located, config.validation)
-    if forest_kept:
-        LOGGER.info("Detecciones en bosque con FRP bajo mantenidas como válidas: %s", forest_kept)
-
-    is_valid = located["is_valid"].astype(bool)
-    if not is_valid.any():
-        raise NoDetectionsError("Ninguna detección es válida (todas marcadas con skip_reason)")
-
-    with log_stage(f"observaciones ({int(is_valid.sum()):,} detecciones válidas)"):
-        windowed = assign_time_windows(located[is_valid], config.windows.mode)
-        observations = build_observations(windowed, config.confidence)
-
-    with log_stage("eventos (enlace entre ventanas, energía y biomasa)"):
-        events = build_events(observations, config, previous)
-
-    # Las no válidas se conservan en la tabla de detecciones, sin observación ni evento.
-    skipped = located[~is_valid].assign(observation_id=None, is_representative=False)
-    all_detections = pd.concat([observations.detections, skipped], ignore_index=True)
-    all_detections = all_detections.sort_values(
-        ["acq_datetime", "detection_id"], ignore_index=True
-    )
-
-    discarded = ingest.discarded
-    if geometries.outside_aoi:
-        outside = pd.DataFrame(
-            {"source": ["ALL"], "reason": ["outside_aoi"], "count": [geometries.outside_aoi]}
-        )
-        discarded = pd.concat([discarded, outside], ignore_index=True)
-
-    run_parameters = {
-        "parameters": config.algorithm_parameters(),
-        "config": config.to_dict(),
-        "metric_crs_resolved": geometries.metric_crs.to_string(),
-        "counts": {
-            "detections": len(all_detections),
-            "skipped_detections": int((~is_valid).sum()),
-            "observations": len(events.observations),
-            "fire_events": len(events.events),
-            "event_merges": len(events.merges),
-            "discarded": int(discarded["count"].sum()) if not discarded.empty else 0,
-        },
-    }
-
-    return PipelineTables(
-        detections=all_detections,
-        observations=events.observations,
-        events=events.events,
-        event_detections=events.event_detections,
-        merges=events.merges,
-        discarded=discarded,
-        run_parameters=run_parameters,
-    )
+    return result.tables
 
 
 def run_frames(
@@ -185,51 +50,33 @@ def run_frames(
     clean_dir: str | Path | None = None,
 ) -> PipelineTables:
     """
-    Procesa DataFrames FIRMS ya cargados y escribe las salidas.
+    Runs the ETL on already loaded FIRMS DataFrames and writes the outputs.
 
-    Es la vía más directa: basta con tener los DataFrames (MODIS y/o VIIRS, tal cual salen de
-    :func:`fire_etl.ingest.read_firms_csv` o de ``pd.read_csv``) y llamar a esta función.
+    This is the most direct route: it is enough to have the DataFrames (MODIS and/or VIIRS, as
+    returned by :func:`fire_etl.extract.firms.reader.read_firms_csv` or by ``pd.read_csv``) and
+    call this function.
 
     Parameters
     ----------
     frames : Iterable[pd.DataFrame]
-        Tablas FIRMS crudas, en cualquier orden.
+        Raw FIRMS tables, in any order.
     config : PipelineConfig | None
-        Configuración; por defecto los valores de ``config/default.yaml``.
+        Configuration; defaults to the values of ``config/default.yaml``.
     output_dir : str | Path | None
-        Directorio de salida; por defecto ``config.output.directory``.
+        Output directory; defaults to ``config.output.directory``.
     clean_dir : str | Path | None
-        Directorio de los datos finales (``clean_data``); por defecto
+        Directory of the final data (``clean_data``); defaults to
         ``config.output.clean_data_directory``.
 
     Returns
     -------
     PipelineTables
-        Tablas escritas (``detections``, ``observations``, ``events``...).
+        Tables written (``detections``, ``observations``, ``events``...).
     """
     config = config or PipelineConfig()
-    directory = Path(output_dir or config.output.directory)
-    previous = read_previous_state(directory) if config.output.use_previous_state else None
+    extracted = extract(config, frames=frames, output_dir=output_dir)
 
-    with log_stage("ingesta y validación de los ficheros FIRMS"):
-        ingest = ingest_frames(frames, config)
-
-    tables = process_detections(ingest, config, previous)
-    with log_stage("escritura de GeoParquet"):
-        write_tables(tables, directory, config.geometry.storage_crs)
-
-    LOGGER.info("Salidas escritas en %s: %s", directory, tables.run_parameters["counts"])
-
-    clean_directory = Path(clean_dir or config.output.clean_data_directory)
-    with log_stage("datos finales (clean_data)"):
-        clean = build_clean_data(tables, config)
-        write_clean_data(clean, clean_directory)
-    LOGGER.info("Datos finales escritos en %s: %s", clean_directory, clean.metadata["counts"])
-
-    # Después de los ficheros: el GeoParquet es el respaldo si la base de datos falla.
-    load_to_postgres(tables, config)
-
-    return tables
+    return _run_etl(extracted, config, output_dir, clean_dir)
 
 
 def run(
@@ -239,38 +86,38 @@ def run(
     clean_dir: str | Path | None = None,
 ) -> PipelineTables:
     """
-    Ingiere ficheros locales, procesa y escribe las salidas.
+    Runs the ETL on local FIRMS files and writes the outputs.
 
     Parameters
     ----------
     input_paths : Sequence[str | Path]
-        Ficheros FIRMS MODIS y/o VIIRS.
+        FIRMS MODIS and/or VIIRS files.
     config : PipelineConfig
-        Configuración del pipeline.
+        Pipeline configuration.
     output_dir : str | Path | None
-        Directorio de salida; por defecto ``config.output.directory``.
+        Output directory; defaults to ``config.output.directory``.
     clean_dir : str | Path | None
-        Directorio de los datos finales; por defecto ``config.output.clean_data_directory``.
+        Directory of the final data; defaults to ``config.output.clean_data_directory``.
 
     Returns
     -------
     PipelineTables
-        Tablas escritas.
+        Tables written.
     """
-    frames = (read_firms_csv(path) for path in input_paths)
+    extracted = extract(config, input_paths=input_paths, output_dir=output_dir)
 
-    return run_frames(frames, config, output_dir, clean_dir)
+    return _run_etl(extracted, config, output_dir, clean_dir)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fusión de detecciones MODIS + VIIRS (FIRMS)")
-    parser.add_argument("--config", type=Path, default=None, help="YAML de configuración")
+    parser = argparse.ArgumentParser(description="MODIS + VIIRS detection fusion (FIRMS)")
+    parser.add_argument("--config", type=Path, default=None, help="YAML configuration file")
     parser.add_argument(
-        "--input", type=Path, action="append", required=True, help="CSV FIRMS (repetible)"
+        "--input", type=Path, action="append", required=True, help="FIRMS CSV (repeatable)"
     )
-    parser.add_argument("--output-dir", type=Path, default=None, help="Directorio de salida")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Output directory")
     parser.add_argument(
-        "--no-previous-state", action="store_true", help="Ignora las salidas previas"
+        "--no-previous-state", action="store_true", help="Ignore the previous outputs"
     )
 
     return parser.parse_args(argv)
