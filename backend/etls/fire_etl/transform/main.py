@@ -2,7 +2,8 @@
 Transform: from the raw FIRMS tables to the final tables and the clean data.
 
 Stages: standardization (normalization, validation and deduplication) -> geometries and zone
-filter -> land cover (SIGPAC) -> observations -> events -> final data (``clean_data``).
+filter -> land cover (SIGPAC) -> static thermal sources -> observations -> events -> final data
+(``clean_data``).
 It writes nothing: writing is the job of :mod:`fire_etl.load.main`.
 """
 
@@ -24,6 +25,11 @@ from fire_etl.transform.processing.events import PreviousState, build_events
 from fire_etl.transform.processing.fusion import assign_time_windows, build_observations
 from fire_etl.transform.processing.geometry import build_detection_geometries
 from fire_etl.transform.sigpac_land_cover import enrich, log_summary
+from fire_etl.transform.static_sources import (
+    fetch_static_cells,
+    flag_static_sources,
+    log_flag_summary,
+)
 from fire_etl.transform.tables import PipelineTables
 
 LOGGER = logging.getLogger(__name__)
@@ -129,6 +135,14 @@ def process_detections(
             "land_cover_confidence, sigpac_use, is_agricultural and is_forest will be empty."
         )
 
+    static_cfg = config.static_sources
+    if static_cfg.enabled and config.database.url:
+        cells = fetch_static_cells(config.database.url, static_cfg)
+        if cells:
+            located, static_summary = flag_static_sources(located, cells, static_cfg)
+            log_flag_summary(static_summary, static_cfg)
+
+    # After the static sources: a detection in an industry is not rescued even if it is forest.
     located, forest_kept = keep_forest_detections(located, config.validation)
     if forest_kept:
         LOGGER.info("Forest detections with low FRP kept as valid: %s", forest_kept)

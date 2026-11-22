@@ -34,11 +34,13 @@ def test_default_yaml_matches_dataclass_defaults_except_spain_area():
         area_of_interest=AreaOfInterestConfig(),
         database=DatabaseConfig(),
         land_cover=LandCoverConfig(),
+        static_sources=replace(loaded.static_sources, enabled=False),
         validation=no_zones,
     )
     assert loaded.download == DownloadConfig()
 
     assert loaded.database.enabled
+    assert loaded.static_sources.enabled
     assert neutral == PipelineConfig()
 
 

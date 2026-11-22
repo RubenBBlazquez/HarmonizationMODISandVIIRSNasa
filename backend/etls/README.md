@@ -29,6 +29,7 @@ backend/etls/
 │   │   ├── tables.py             # PipelineTables (resultado que consume load)
 │   │   ├── clean_data.py         # construcción de los datos finales para el mapa y el chatbot
 │   │   ├── sigpac_land_cover.py  # cobertura del suelo con SIGPAC
+│   │   ├── static_sources.py     # fuentes térmicas fijas (industria): análisis y marcado
 │   │   ├── firms/
 │   │   │   ├── normalization.py  # CSV crudo -> esquema común, detection_id
 │   │   │   ├── validation.py     # motivos de invalidez, filtros de fuente, descartes
@@ -46,7 +47,8 @@ backend/etls/
 │       ├── geoparquet.py         # GeoParquet (EPSG:4326) y lectura del estado previo
 │       ├── clean_data.py         # escritura de los datos finales (GeoJSON + JSON)
 │       ├── postgres.py           # carga de las tablas en PostGIS
-│       └── sigpac.py             # carga de recintos SIGPAC en PostGIS (proceso aparte)
+│       ├── sigpac.py             # carga de recintos SIGPAC en PostGIS (proceso aparte)
+│       └── static_sources.py     # carga de fire.static_sources (proceso aparte)
 └── tests/
 ```
 
@@ -311,6 +313,7 @@ no entran en observaciones ni eventos):
 | `below_frp_threshold` | FRP por debajo del mínimo del instrumento (`frp_classification.py`) |
 | `static_land_source`, `active_volcano`, `offshore_detection` | campo `type` de FIRMS (2, 1 y 3; solo en los ficheros anuales). `type 0` = incendio de vegetación |
 | `volcanic_eruption` | `validation.exclusion_zones`: zona y fechas configuradas |
+| `persistent_thermal_source` | celda de `fire.static_sources` (industria detectada en el histórico; ver [Fuentes térmicas fijas](#fuentes-térmicas-fijas-industria)) |
 
 `type` **no** separa todo: la erupción de La Palma (2021) está clasificada casi entera como `type 0`
 (el 98,7 % de sus detecciones), por eso hay una zona de exclusión configurable
@@ -371,6 +374,34 @@ python scripts/load_countries.py ruta/al.zip  # usa un zip local
 ```
 
 La clave de cada país es `ADM0_A3` (`ESP`, `PRT`, `FRA`...). Recargar sustituye todos los países.
+
+## Fuentes térmicas fijas (industria)
+
+Los ficheros NRT no traen el `type` de FIRMS, así que una acería o una refinería aparecían como
+incendio activo en cada pasada. `scripts/load_static_sources.py` divide todas las detecciones de
+`fire.detections` en una rejilla (`static_sources.grid_crs`, celdas de `cell_size_m` = 400 m) y
+guarda en `fire.static_sources` las celdas fijas:
+
+- **persistencia**: detecciones en ≥ `min_days` (10) días distintos, de ≥ `min_years` (2) años y de
+  ≥ `min_months_of_year` (6) meses del calendario. Un incendio o una quema agrícola es estacional;
+  una industria arde todo el año.
+- **FIRMS**: ≥ `min_firms_static` (3) detecciones con `type 2` en los ficheros anuales.
+
+Con el histórico 2000-2025 salen 617 celdas: recupera 326 de las 368 que FIRMS marca como fijas y
+añade industria sin etiquetar y la colada de La Palma posterior a 2021.
+
+```bash
+python scripts/load_static_sources.py --dry-run          # solo el análisis (resumen en el log)
+python scripts/load_static_sources.py                    # análisis y carga en database.url
+python scripts/load_static_sources.py --url postgresql://...  # calcula en local, carga en otra BD
+```
+
+El pipeline (`static_sources.enabled`) lee la tabla y marca con
+`skip_reason = persistent_thermal_source` las detecciones válidas (o con FRP bajo) que caen en una
+celda fija o, con `match_neighbors`, en una de sus 8 vecinas (error de geolocalización del píxel),
+salvo que SIGPAC diga que el punto es vegetación (`protected_land_covers`). Sin la tabla solo avisa
+en el log. Recalcular sustituye solo las celdas de la rejilla configurada; si cambias `grid_crs` o
+`cell_size_m`, vuelve a lanzar el análisis. La carga del pipeline no vacía esta tabla.
 
 ## Cobertura del suelo con SIGPAC
 
