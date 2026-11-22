@@ -2,6 +2,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from backend.api.routes import router
 
@@ -13,6 +14,8 @@ origins = os.environ.get("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
 app.add_middleware(
     CORSMiddleware, allow_origins=origins, allow_methods=["GET"], allow_headers=["*"]
 )
+# El mapa precarga decenas de miles de detecciones: el GeoJSON comprimido ocupa ~8 veces menos.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.include_router(router)
 
 

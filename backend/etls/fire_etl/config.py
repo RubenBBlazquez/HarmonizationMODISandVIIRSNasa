@@ -4,6 +4,7 @@ Configuración del pipeline de fusión MODIS + VIIRS.
 Los parámetros del algoritmo se definen como dataclasses inmutables cuyos valores por defecto
 coinciden con ``backend/etls/config/default.yaml``. Un fichero YAML puede sobrescribir cualquier
 subconjunto de claves con :func:`load_config`.
+
 """
 
 from __future__ import annotations
