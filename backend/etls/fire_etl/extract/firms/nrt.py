@@ -1,18 +1,19 @@
 """
-Descarga de los ficheros casi en tiempo real (NRT) de NASA FIRMS para el año en curso.
+Download of the NASA FIRMS near-real-time (NRT) files for the current year.
 
-El archivo anual por país (:mod:`fire_etl.firms_download`) solo llega hasta el último año completo.
-El NRT (``nrt3.modaps.eosdis.nasa.gov/archive/FIRMS/<fuente>/<región>/``) tiene un fichero por día
-(``..._NRT_AAAADDD.txt``, con el día del año), pero **solo guarda los últimos ~60 días**: lo que
-queda entre el fin del archivo anual y el inicio del NRT no lo cubre ninguna de las dos fuentes.
+The annual archive per country (:mod:`fire_etl.extract.firms.archive`) only goes up to the last
+complete year.
+The NRT (``nrt3.modaps.eosdis.nasa.gov/archive/FIRMS/<source>/<region>/``) has one file per day
+(``..._NRT_YYYYDDD.txt``, with the day of the year), but **only keeps the last ~60 days**: what
+lies between the end of the annual archive and the start of the NRT is covered by neither source.
 
-- El listado de las carpetas es público; **los ficheros exigen un token de Earthdata**
-  (``Authorization: Bearer``), que se lee de una variable de entorno y nunca se escribe en
-  ficheros ni en el log.
-- No se siguen redirecciones: si el token no es válido o ha caducado, el servidor redirige a la
-  página de login y la descarga se detiene, sin enviar el token a otro servidor.
-- Los ficheros de los últimos días crecen durante el día, así que se vuelven a bajar siempre;
-  los más antiguos, una vez descargados, no.
+- The folder listing is public; **the files require an Earthdata token**
+  (``Authorization: Bearer``), which is read from an environment variable and is never written
+  to files or to the log.
+- Redirects are not followed: if the token is invalid or has expired, the server redirects to
+  the login page and the download stops, without sending the token to another server.
+- The files of the last few days grow during the day, so they are always downloaded again;
+  older ones, once downloaded, are not.
 """
 
 from __future__ import annotations
@@ -27,45 +28,51 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fire_etl.config import NrtConfig
-from fire_etl.firms_download import DOWNLOADED, MISSING, USER_AGENT, fetch_to_file, with_retries
+from fire_etl.extract.firms.archive import (
+    DOWNLOADED,
+    MISSING,
+    USER_AGENT,
+    fetch_to_file,
+    with_retries,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 FILE_NAME_PATTERN = re.compile(r'data-name="([^"/]+_(\d{4})(\d{3})\.txt)"')
 REDIRECT_OR_DENIED = frozenset({301, 302, 303, 307, 308, 401, 403})
 LISTING_TIMEOUT_S = 30
-PROGRESS_EVERY = 25  # cada cuántos ficheros se informa del avance
+PROGRESS_EVERY = 25  # how many files between progress reports
 
 
 class NrtAuthError(RuntimeError):
-    """El token de Earthdata no es válido o ha caducado (el servidor pide iniciar sesión)."""
+    """The Earthdata token is invalid or has expired (the server asks to log in)."""
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """No sigue redirecciones, para no reenviar el token a otro servidor."""
+    """Does not follow redirects, so the token is not forwarded to another server."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        """Devuelve ``None``: la redirección se trata como un error HTTP."""
+        """Returns ``None``: the redirect is treated as an HTTP error."""
         return None
 
 
 @dataclass(frozen=True)
 class NrtItem:
     """
-    Un fichero NRT diario.
+    A daily NRT file.
 
     Attributes
     ----------
     source : str
-        Carpeta del sensor (``modis-c6.1``, ``noaa-20-viirs-c2``...).
+        Sensor folder (``modis-c6.1``, ``noaa-20-viirs-c2``...).
     name : str
-        Nombre del fichero.
+        File name.
     day : date
-        Día UTC al que corresponde (según el día del año del nombre).
+        UTC day it corresponds to (from the day of the year in the name).
     url : str
-        Dirección completa.
+        Full address.
     path : Path
-        Destino local.
+        Local destination.
     """
 
     source: str
@@ -77,7 +84,7 @@ class NrtItem:
 
 @dataclass
 class NrtResult:
-    """Resultado de la descarga del NRT."""
+    """Result of the NRT download."""
 
     downloaded: list[Path] = field(default_factory=list)
     skipped: list[Path] = field(default_factory=list)
@@ -91,12 +98,12 @@ class NrtResult:
 
 def parse_listing(html: str) -> list[tuple[str, date]]:
     """
-    Ficheros ``..._AAAADDD.txt`` de un listado de carpeta, con su día.
+    ``..._YYYYDDD.txt`` files of a folder listing, with their day.
 
     Returns
     -------
     list[tuple[str, date]]
-        ``(nombre, día)`` sin repetidos, ordenados por día.
+        ``(name, day)`` without duplicates, sorted by day.
     """
     found = {}
     for name, year, day_of_year in FILE_NAME_PATTERN.findall(html):
@@ -109,7 +116,7 @@ def parse_listing(html: str) -> list[tuple[str, date]]:
 
 
 def list_remote(config: NrtConfig, source: str) -> list[tuple[str, date]]:
-    """Ficheros disponibles en la carpeta de una fuente (el listado es público)."""
+    """Files available in the folder of a source (the listing is public)."""
     url = f"{config.base_url.rstrip('/')}/{source}/{config.region}/"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=LISTING_TIMEOUT_S) as response:
@@ -117,7 +124,7 @@ def list_remote(config: NrtConfig, source: str) -> list[tuple[str, date]]:
 
 
 def first_uncovered_day(today: date | None = None) -> date:
-    """Primer día que el archivo anual no cubre: el 1 de enero del año en curso."""
+    """First day not covered by the annual archive: January 1st of the current year."""
     reference = today or datetime.now(timezone.utc).date()
 
     return date(reference.year, 1, 1)
@@ -130,23 +137,23 @@ def plan_nrt(
     today: date | None = None,
 ) -> list[NrtItem]:
     """
-    Ficheros NRT a tener en disco: los de fechas que el archivo anual no cubre.
+    NRT files to have on disk: those of the dates the annual archive does not cover.
 
     Parameters
     ----------
     config : NrtConfig
-        Fuentes y región.
+        Sources and region.
     remote : dict[str, list[tuple[str, date]]]
-        Ficheros disponibles por fuente (de :func:`list_remote`).
+        Files available per source (from :func:`list_remote`).
     directory : str | Path | None
-        Carpeta destino; por defecto ``config.directory``.
+        Destination folder; defaults to ``config.directory``.
     today : date | None
-        Fecha de referencia (solo para tests).
+        Reference date (tests only).
 
     Returns
     -------
     list[NrtItem]
-        Ordenados por fuente y día.
+        Sorted by source and day.
     """
     target = Path(directory or config.directory)
     first = first_uncovered_day(today)
@@ -162,7 +169,7 @@ def plan_nrt(
 
 
 def needs_download(item: NrtItem, refetch_days: int, today: date) -> bool:
-    """``True`` si falta el fichero o es de los últimos días (sigue creciendo)."""
+    """``True`` if the file is missing or is one of the last few days (still growing)."""
     if not (item.path.exists() and item.path.stat().st_size > 0):
         return True
 
@@ -182,7 +189,7 @@ def _fetch(item: NrtItem, config: NrtConfig, token: str) -> str:
     except urllib.error.HTTPError as error:
         if error.code in REDIRECT_OR_DENIED:
             raise NrtAuthError(
-                f"El servidor rechazó el token (HTTP {error.code}): caducado o no válido."
+                f"The server rejected the token (HTTP {error.code}): expired or invalid."
             ) from error
 
         raise
@@ -190,20 +197,20 @@ def _fetch(item: NrtItem, config: NrtConfig, token: str) -> str:
 
 def resolve_token(config: NrtConfig, base_dir: str | Path | None = None) -> str:
     """
-    Token de Earthdata: la variable de entorno ``config.token_env`` y, si no existe, el fichero
-    local ``config.token_file`` (primera línea que no esté vacía ni empiece por ``#``).
+    Earthdata token: the ``config.token_env`` environment variable and, if it does not exist, the
+    local file ``config.token_file`` (first line that is neither empty nor starts with ``#``).
 
     Parameters
     ----------
     config : NrtConfig
-        Nombre de la variable y ruta del fichero.
+        Variable name and file path.
     base_dir : str | Path | None
-        Carpeta respecto a la que se resuelve una ruta relativa de ``token_file``.
+        Folder against which a relative ``token_file`` path is resolved.
 
     Returns
     -------
     str
-        El token, o cadena vacía si no hay ninguno. Nunca se registra en el log.
+        The token, or an empty string if there is none. It is never logged.
     """
     from_env = os.environ.get(config.token_env, "").strip()
     if from_env:
@@ -233,27 +240,27 @@ def download_nrt(
     base_dir: str | Path | None = None,
 ) -> NrtResult:
     """
-    Descarga los ficheros NRT que falten (y los de los últimos días, que se actualizan).
+    Downloads the missing NRT files (and those of the last few days, which are updated).
 
-    El token sale de la variable de entorno o del fichero local (ver :func:`resolve_token`); sin
-    él no se descarga nada y se avisa. Si el servidor lo rechaza se detiene todo. Un fichero que
-    falla por otro motivo no detiene el resto.
+    The token comes from the environment variable or the local file (see :func:`resolve_token`);
+    without it nothing is downloaded and a warning is shown. If the server rejects it, everything
+    stops. A file that fails for another reason does not stop the rest.
 
     Parameters
     ----------
     config : NrtConfig
-        Fuentes, región y token.
+        Sources, region and token.
     directory : str | Path | None
-        Carpeta destino; por defecto ``config.directory``.
+        Destination folder; defaults to ``config.directory``.
     today : date | None
-        Fecha de referencia (solo para tests).
+        Reference date (tests only).
     base_dir : str | Path | None
-        Carpeta respecto a la que se resuelve ``config.token_file`` si es relativa.
+        Folder against which ``config.token_file`` is resolved if it is relative.
 
     Returns
     -------
     NrtResult
-        Ficheros descargados, ya existentes, inexistentes y fallidos.
+        Downloaded files, already existing ones, missing ones and failed ones.
     """
     result = NrtResult()
     if not config.enabled:
@@ -263,8 +270,8 @@ def download_nrt(
     if not token:
         result.token_missing = True
         LOGGER.warning(
-            "NRT omitido: define el token de Earthdata en la variable de entorno %s o en el "
-            "fichero local %s.",
+            "NRT skipped: set the Earthdata token in the environment variable %s or in the "
+            "local file %s.",
             config.token_env,
             config.token_file,
         )
@@ -276,7 +283,7 @@ def download_nrt(
         try:
             remote[source] = list_remote(config, source)
         except (urllib.error.URLError, TimeoutError) as error:
-            LOGGER.error("No se pudo listar %s/%s: %s", source, config.region, error)
+            LOGGER.error("Could not list %s/%s: %s", source, config.region, error)
             result.failed[f"{source}/{config.region}/"] = str(error)
 
     items = plan_nrt(config, remote, directory, reference)
@@ -291,18 +298,18 @@ def download_nrt(
             result.skipped.append(item.path)
 
     LOGGER.info(
-        "NRT: %s ficheros (%s a %s): %s por descargar, %s ya en disco.%s",
+        "NRT: %s files (%s to %s): %s to download, %s already on disk.%s",
         len(items),
         result.first_day,
         result.last_day,
         len(pending),
         len(result.skipped),
-        " La primera vez tarda unos minutos (~1 s por fichero)." if len(pending) > 50 else "",
+        " The first time takes a few minutes (~1 s per file)." if len(pending) > 50 else "",
     )
 
     for index, item in enumerate(pending, start=1):
         if index % PROGRESS_EVERY == 0:
-            LOGGER.info("NRT: descargados %s de %s ficheros...", index - 1, len(pending))
+            LOGGER.info("NRT: downloaded %s of %s files...", index - 1, len(pending))
 
         try:
             status = with_retries(
@@ -312,11 +319,11 @@ def download_nrt(
                 item.url,
             )
         except NrtAuthError as error:
-            LOGGER.error("%s Se detiene la descarga del NRT.", error)
+            LOGGER.error("%s Stopping the NRT download.", error)
             result.auth_failed = True
             break
-        except Exception as error:  # un fichero fallido no detiene el resto
-            LOGGER.error("No se pudo descargar %s: %s", item.url, error)
+        except Exception as error:  # a failed file does not stop the rest
+            LOGGER.error("Could not download %s: %s", item.url, error)
             result.failed[item.url] = str(error)
             continue
 
@@ -326,7 +333,7 @@ def download_nrt(
             result.downloaded.append(item.path)
 
     LOGGER.info(
-        "NRT terminado: %s descargados, %s inexistentes, %s fallidos.",
+        "NRT finished: %s downloaded, %s missing, %s failed.",
         len(result.downloaded),
         len(result.missing),
         len(result.failed),
@@ -336,5 +343,5 @@ def download_nrt(
 
 
 def nrt_files(directory: str | Path) -> list[Path]:
-    """Ficheros NRT ya en disco (aunque esta ejecución no haya podido descargar)."""
+    """NRT files already on disk (even if this run could not download any)."""
     return sorted(Path(directory).glob("*.txt"))

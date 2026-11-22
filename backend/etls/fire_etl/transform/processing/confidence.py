@@ -1,30 +1,31 @@
 """
-Normalización y fusión de la confianza de detecciones MODIS y VIIRS.
+Normalization and fusion of the confidence of MODIS and VIIRS detections.
 
-Las categorías fusionadas (``low``, ``medium``, ``high``, ``very_high``) son propias de este
-algoritmo y **no** equivalen a las categorías oficiales de FIRMS.
+The fused categories (``low``, ``medium``, ``high``, ``very_high``) are specific to this
+algorithm and are **not** equivalent to the official FIRMS categories.
 
-Matriz completa (filas: nivel MODIS de la observación; columnas: nivel VIIRS; ``—`` = sensor
-ausente). ``*`` = low aislada (un único sensor), que se marca y opcionalmente se descarta.
+Complete matrix (rows: MODIS level of the observation; columns: VIIRS level; ``—`` = sensor
+absent). ``*`` = isolated low (a single sensor), which is flagged and optionally discarded.
 
 =============  ==========  ==========  ==========  ===========
 MODIS \\ VIIRS  —           low         nominal     high
 =============  ==========  ==========  ==========  ===========
-—              (inválido)  low *       medium      medium [1]
+—              (invalid)   low *       medium      medium [1]
 low            low *       low         medium      medium
 nominal        medium      medium      high        high
 high           medium [1]  medium      high        very_high
 =============  ==========  ==========  ==========  ===========
 
-[1] Configurable con ``single_sensor_high_level`` (``medium`` por defecto: sin corroboración
-entre sensores una observación nunca supera ``medium``).
+[1] Configurable with ``single_sensor_high_level`` (``medium`` by default: without
+corroboration between sensors an observation never exceeds ``medium``).
 
-Criterios:
+Criteria:
 
-- La corroboración entre sensores (MODIS + VIIRS) es la única vía a ``high`` / ``very_high``.
-- Si algún sensor coincidente es ``low``, la observación queda en ``medium`` como máximo: un
-  sensor la respalda y el otro la ve débilmente.
-- Dos satélites del mismo sensor (Aqua + Terra, S-NPP + NOAA-20) no cuentan como corroboración.
+- Corroboration between sensors (MODIS + VIIRS) is the only way to ``high`` / ``very_high``.
+- If any coinciding sensor is ``low``, the observation stays at ``medium`` at most: one
+  sensor backs it and the other sees it weakly.
+- Two satellites of the same sensor (Aqua + Terra, S-NPP + NOAA-20) do not count as
+  corroboration.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ import pandas as pd
 
 
 class ConfidenceLevel(StrEnum):
-    """Confianza normalizada de una detección individual."""
+    """Normalized confidence of an individual detection."""
 
     LOW = "low"
     NOMINAL = "nominal"
@@ -46,7 +47,7 @@ class ConfidenceLevel(StrEnum):
 
 
 class FusedConfidence(StrEnum):
-    """Confianza fusionada de una observación (categorías propias del algoritmo)."""
+    """Fused confidence of an observation (categories specific to the algorithm)."""
 
     LOW = "low"
     MEDIUM = "medium"
@@ -59,20 +60,20 @@ FUSED_RANK = {level: rank for rank, level in enumerate(FusedConfidence)}
 
 
 class MissingSensorConfidenceError(ValueError):
-    """Se pidió fusionar una observación sin confianza de ningún sensor."""
+    """An attempt was made to fuse an observation without confidence from any sensor."""
 
 
 @dataclass(frozen=True)
 class FusionOutcome:
     """
-    Resultado de fusionar la confianza de una observación.
+    Result of fusing the confidence of an observation.
 
     Attributes
     ----------
     level : FusedConfidence
-        Confianza fusionada.
+        Fused confidence.
     is_isolated_low : bool
-        ``True`` si la observación tiene un único sensor y es ``low``.
+        ``True`` if the observation has a single sensor and it is ``low``.
     """
 
     level: FusedConfidence
@@ -85,33 +86,34 @@ def fuse_confidence(
     single_sensor_high_level: FusedConfidence | str = FusedConfidence.MEDIUM,
 ) -> FusionOutcome:
     """
-    Calcula la confianza fusionada de una observación (función pura).
+    Computes the fused confidence of an observation (pure function).
 
     Parameters
     ----------
     modis : ConfidenceLevel | str | None
-        Nivel MODIS de la observación (máximo de sus detecciones MODIS) o ``None`` si no hay.
+        MODIS level of the observation (maximum of its MODIS detections) or ``None`` if there is
+        none.
     viirs : ConfidenceLevel | str | None
-        Nivel VIIRS de la observación o ``None`` si no hay.
+        VIIRS level of the observation or ``None`` if there is none.
     single_sensor_high_level : FusedConfidence | str
-        Nivel asignado a un único sensor con confianza ``high`` (``medium`` o ``high``).
+        Level assigned to a single sensor with ``high`` confidence (``medium`` or ``high``).
 
     Returns
     -------
     FusionOutcome
-        Nivel fusionado y marca de low aislada.
+        Fused level and isolated-low flag.
 
     Raises
     ------
     MissingSensorConfidenceError
-        Si ambos sensores son ``None``.
+        If both sensors are ``None``.
     """
     modis_level = _as_level(modis)
     viirs_level = _as_level(viirs)
     single_high = FusedConfidence(single_sensor_high_level)
 
     if modis_level is None and viirs_level is None:
-        raise MissingSensorConfidenceError("Una observación necesita al menos un sensor")
+        raise MissingSensorConfidenceError("An observation needs at least one sensor")
 
     if modis_level is None or viirs_level is None:
         only = modis_level if modis_level is not None else viirs_level
@@ -150,17 +152,17 @@ def _as_level(value: ConfidenceLevel | str | None) -> ConfidenceLevel | None:
 
 def max_level(levels: Iterable[str]) -> str | None:
     """
-    Devuelve el nivel más alto de un conjunto de niveles normalizados.
+    Returns the highest level of a set of normalized levels.
 
     Parameters
     ----------
     levels : Iterable[str]
-        Niveles ``low`` / ``nominal`` / ``high``; se ignoran los nulos.
+        ``low`` / ``nominal`` / ``high`` levels; nulls are ignored.
 
     Returns
     -------
     str | None
-        Nivel máximo o ``None`` si no hay niveles.
+        Maximum level, or ``None`` if there are no levels.
     """
     present = [ConfidenceLevel(level) for level in levels if isinstance(level, str)]
     if not present:
@@ -170,7 +172,7 @@ def max_level(levels: Iterable[str]) -> str | None:
 
 
 def max_fused(levels: Iterable[str]) -> str | None:
-    """Devuelve la confianza fusionada más alta (``None`` si no hay valores)."""
+    """Returns the highest fused confidence (``None`` if there are no values)."""
     present = [FusedConfidence(level) for level in levels if isinstance(level, str)]
     if not present:
         return None
@@ -180,21 +182,21 @@ def max_fused(levels: Iterable[str]) -> str | None:
 
 def normalize_modis_confidence(values: pd.Series, low_max: int, nominal_max: int) -> pd.Series:
     """
-    Normaliza la confianza numérica MODIS (0-100) a low/nominal/high.
+    Normalizes the numeric MODIS confidence (0-100) to low/nominal/high.
 
     Parameters
     ----------
     values : pd.Series
-        Valores originales (texto o numéricos).
+        Original values (text or numeric).
     low_max : int
-        Máximo incluido del nivel ``low``.
+        Inclusive maximum of the ``low`` level.
     nominal_max : int
-        Máximo incluido del nivel ``nominal``.
+        Inclusive maximum of the ``nominal`` level.
 
     Returns
     -------
     pd.Series
-        Niveles normalizados; ``None`` si el valor no es numérico o está fuera de 0-100.
+        Normalized levels; ``None`` if the value is not numeric or is outside 0-100.
     """
     numeric = pd.to_numeric(values, errors="coerce")
     valid = numeric.between(0, 100)
@@ -210,19 +212,19 @@ def normalize_modis_confidence(values: pd.Series, low_max: int, nominal_max: int
 
 def normalize_viirs_confidence(values: pd.Series, mapping: dict[str, str]) -> pd.Series:
     """
-    Normaliza la confianza categórica VIIRS (``l``/``n``/``h`` o palabra completa).
+    Normalizes the categorical VIIRS confidence (``l``/``n``/``h`` or full word).
 
     Parameters
     ----------
     values : pd.Series
-        Valores originales.
+        Original values.
     mapping : dict[str, str]
-        Correspondencia en minúsculas entre valor original y nivel.
+        Lowercase mapping between original value and level.
 
     Returns
     -------
     pd.Series
-        Niveles normalizados; ``None`` si el valor no está en ``mapping``.
+        Normalized levels; ``None`` if the value is not in ``mapping``.
     """
     normalized = values.astype("string").str.strip().str.lower().map(mapping)
 

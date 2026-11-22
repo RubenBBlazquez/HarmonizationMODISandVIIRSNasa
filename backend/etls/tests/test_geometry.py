@@ -1,4 +1,4 @@
-"""Tests de geometrías: CRS métrico, footprints y área de interés."""
+"""Tests of geometries: metric CRS, footprints and area of interest."""
 
 from __future__ import annotations
 
@@ -6,17 +6,19 @@ import pytest
 import shapely
 
 from fire_etl.config import AreaOfInterestConfig, GeometryConfig
-from fire_etl.geometry import (
+from fire_etl.transform.processing.geometry import (
     MetricCrsError,
     build_detection_geometries,
     resolve_metric_crs,
     utm_crs_for_lon_lat,
 )
-from tests.conftest import BASE_LAT, BASE_LON, ingest_rows, modis_row, viirs_row
+from tests.conftest import BASE_LAT, BASE_LON, modis_row, standardize_rows, viirs_row
 
 
 def test_footprint_is_the_width_by_height_area_plus_buffer(config):
-    detections = ingest_rows(config, modis=[modis_row("2026-09-15 10:00", scan=2.0, track=1.5)])
+    detections = standardize_rows(
+        config, modis=[modis_row("2026-09-15 10:00", scan=2.0, track=1.5)]
+    )
 
     result = build_detection_geometries(
         detections.detections, GeometryConfig(footprint_buffer_m=400.0), AreaOfInterestConfig()
@@ -24,7 +26,7 @@ def test_footprint_is_the_width_by_height_area_plus_buffer(config):
     min_x, min_y, max_x, max_y = result.detections.geometry.iloc[0].bounds
 
     assert result.metric_crs.to_epsg() == 25830
-    side = 1000.0  # MODIS: 1 km x 1 km nominal, sin importar el scan/track del fichero
+    side = 1000.0  # MODIS: 1 km x 1 km nominal, regardless of the file's scan/track
     assert result.detections["area_width_km"].iloc[0] == pytest.approx(1.0)
     assert result.detections["area_height_km"].iloc[0] == pytest.approx(1.0)
     assert max_x - min_x == pytest.approx(side + 2 * 400, abs=1e-6)
@@ -33,7 +35,7 @@ def test_footprint_is_the_width_by_height_area_plus_buffer(config):
 
 
 def test_geometry_keeps_point_and_footprint_columns(config):
-    detections = ingest_rows(config, viirs=[viirs_row("2026-09-15 10:00")]).detections
+    detections = standardize_rows(config, viirs=[viirs_row("2026-09-15 10:00")]).detections
 
     frame = build_detection_geometries(
         detections, GeometryConfig(), AreaOfInterestConfig()
@@ -46,7 +48,7 @@ def test_geometry_keeps_point_and_footprint_columns(config):
 
 def test_area_of_interest_filters_and_counts_outside(config):
     rows = [modis_row("2026-09-15 10:00"), modis_row("2026-09-15 10:00", north_m=50_000)]
-    detections = ingest_rows(config, modis=rows).detections
+    detections = standardize_rows(config, modis=rows).detections
     bbox = (BASE_LON - 0.1, BASE_LAT - 0.1, BASE_LON + 0.1, BASE_LAT + 0.1)
     aoi = AreaOfInterestConfig(bbox=bbox)
 
@@ -61,7 +63,7 @@ def test_auto_metric_crs_uses_utm_zone_of_reference():
 
     assert crs.to_epsg() == 32629
     assert utm_crs_for_lon_lat(3.8, 51.2).to_epsg() == 32631
-    assert utm_crs_for_lon_lat(-57.0, -10.0).to_epsg() == 32721  # hemisferio sur, zona 21
+    assert utm_crs_for_lon_lat(-57.0, -10.0).to_epsg() == 32721  # southern hemisphere, zone 21
 
 
 def test_geographic_crs_is_rejected_for_calculations():
@@ -70,7 +72,7 @@ def test_geographic_crs_is_rejected_for_calculations():
 
 
 def test_area_is_nominal_per_sensor_and_ignores_scan_and_track(config):
-    detections = ingest_rows(
+    detections = standardize_rows(
         config,
         modis=[modis_row("2026-09-15 10:00", scan=3.0, track=3.0)],
         viirs=[viirs_row("2026-09-15 10:00", north_m=5000, scan=0.7, track=0.7)],

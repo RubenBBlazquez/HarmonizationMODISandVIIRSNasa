@@ -1,18 +1,19 @@
 """
-Carga de los recintos SIGPAC (FEGA) en PostGIS, un zip provincial cada vez.
+Loading of the SIGPAC parcels (FEGA) into PostGIS, one provincial zip at a time.
 
-El FEGA publica un ``.zip`` por provincia con un GeoPackage dentro (capa ``recinto``, EPSG:4258,
-de 150 MB a 1,3 GB). Cada zip se procesa de forma independiente:
+The FEGA publishes one ``.zip`` per province with a GeoPackage inside (``recinto`` layer,
+EPSG:4258, from 150 MB to 1.3 GB). Each zip is processed independently:
 
-1. Se descomprime en un directorio temporal (se borra al terminar).
-2. Se lee la capa ``recinto`` con geopandas por bloques (memoria acotada) y se reproyecta a
+1. It is unzipped into a temporary directory (deleted when finished).
+2. The ``recinto`` layer is read with geopandas in chunks (bounded memory) and reprojected to
    EPSG:4326.
-3. En **una transacción**: se borran los recintos de esa provincia, se copian los nuevos con
-   ``COPY`` y se anota el zip en ``fire.sigpac_loads``. Si algo falla se deshace todo y la
-   provincia conserva lo que tuviera. Recargar una provincia es seguro (la sustituye).
+3. In **one transaction**: the parcels of that province are deleted, the new ones are copied
+   with ``COPY`` and the zip is recorded in ``fire.sigpac_loads``. If anything fails everything
+   is rolled back and the province keeps what it had. Reloading a province is safe (it
+   replaces it).
 
-Los zips ya registrados en ``fire.sigpac_loads`` se saltan (salvo ``force``) antes de
-descomprimirlos, así que el proceso se puede interrumpir y reanudar.
+Zips already recorded in ``fire.sigpac_loads`` are skipped (unless ``force``) before unzipping
+them, so the process can be interrupted and resumed.
 
 Land cover: SIGPAC (FEGA / Ministerio de Agricultura, Pesca y Alimentación), CC BY 4.0.
 """
@@ -38,7 +39,7 @@ import pandas as pd
 import pyogrio
 import shapely
 
-from fire_etl.sigpac_land_cover import normalize_sigpac_use
+from fire_etl.transform.sigpac_land_cover import normalize_sigpac_use
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,9 +48,9 @@ TABLE = f"{SCHEMA}.sigpac_recintos"
 LOADS_TABLE = f"{SCHEMA}.sigpac_loads"
 LAYER = "recinto"
 STORAGE_SRID = 4326
-CHUNK_ROWS = 50_000  # recintos leídos y copiados por bloque
+CHUNK_ROWS = 50_000  # parcels read and copied per chunk
 
-# Listado público del FEGA (un zip por provincia). Cambia el año aquí al publicarse uno nuevo.
+# Public FEGA listing (one zip per province). Change the year here when a new one is published.
 SIGPAC_BASE_URL = "https://sigpac-hubcloud.es/geopackages/2026/recintos/"
 DOWNLOAD_TIMEOUT_S = 120
 DOWNLOAD_RETRIES = 3
@@ -71,7 +72,7 @@ INTEGER_COLUMNS = (
 )
 OTHER_COLUMNS = ("dn_surface", "csp", "uso_sigpac", "incidencias")
 SOURCE_COLUMNS = (*INTEGER_COLUMNS, *OTHER_COLUMNS)
-# Orden de las columnas en la tabla (``land_cover`` se deriva de ``uso_sigpac``).
+# Order of the columns in the table (``land_cover`` is derived from ``uso_sigpac``).
 TABLE_COLUMNS = (
     "provincia",
     "municipio",
@@ -94,7 +95,7 @@ TABLE_COLUMNS = (
 
 
 class SigpacLoadError(RuntimeError):
-    """Zip o GeoPackage de SIGPAC no utilizable."""
+    """SIGPAC zip or GeoPackage that cannot be used."""
 
 
 class _Copy(Protocol):
@@ -118,18 +119,18 @@ class _Connection(Protocol):
 @dataclass(frozen=True)
 class LoadResult:
     """
-    Resultado de procesar un zip.
+    Result of processing a zip.
 
     Attributes
     ----------
     zip_name : str
-        Nombre del zip.
+        Name of the zip.
     provincia : int | None
-        Código de provincia (``None`` si se saltó sin leerlo).
+        Province code (``None`` if it was skipped without reading it).
     n_recintos : int
-        Recintos cargados (0 si se saltó).
+        Parcels loaded (0 if skipped).
     skipped : bool
-        ``True`` si ya estaba cargado y no se ha forzado.
+        ``True`` if it was already loaded and not forced.
     """
 
     zip_name: str
@@ -140,12 +141,12 @@ class LoadResult:
 
 def find_zips(paths: Iterable[Path]) -> list[Path]:
     """
-    Expande rutas a una lista ordenada de zips (los directorios se buscan sin recursión).
+    Expands paths into a sorted list of zips (directories are searched without recursion).
 
     Raises
     ------
     SigpacLoadError
-        Si una ruta no existe.
+        If a path does not exist.
     """
     zips: list[Path] = []
     for path in paths:
@@ -154,46 +155,46 @@ def find_zips(paths: Iterable[Path]) -> list[Path]:
         elif path.is_file():
             zips.append(path)
         else:
-            raise SigpacLoadError(f"No existe: {path}")
+            raise SigpacLoadError(f"Does not exist: {path}")
 
     return zips
 
 
 def extract_gpkg(zip_path: Path, dest_dir: Path) -> Path:
     """
-    Descomprime el GeoPackage de un zip de SIGPAC en ``dest_dir``.
+    Unzips the GeoPackage of a SIGPAC zip into ``dest_dir``.
 
     Raises
     ------
     SigpacLoadError
-        Si el fichero no es un zip o no contiene exactamente un ``.gpkg``.
+        If the file is not a zip or does not contain exactly one ``.gpkg``.
     """
     try:
         with zipfile.ZipFile(zip_path) as archive:
             members = [name for name in archive.namelist() if name.lower().endswith(".gpkg")]
             if len(members) != 1:
                 raise SigpacLoadError(
-                    f"{zip_path.name}: se esperaba un .gpkg y hay {len(members)}."
+                    f"{zip_path.name}: expected one .gpkg and found {len(members)}."
                 )
 
-            # ``extract`` neutraliza rutas absolutas y ``..`` en el nombre del miembro.
+            # ``extract`` neutralizes absolute paths and ``..`` in the member name.
             return Path(archive.extract(members[0], dest_dir))
     except zipfile.BadZipFile as error:
-        raise SigpacLoadError(f"{zip_path.name}: no es un zip válido ({error}).") from error
+        raise SigpacLoadError(f"{zip_path.name}: not a valid zip ({error}).") from error
 
 
 def read_chunks(gpkg: Path, chunk_rows: int = CHUNK_ROWS) -> Iterator[gpd.GeoDataFrame]:
     """
-    Lee la capa ``recinto`` por bloques, ya en EPSG:4326 y solo con las columnas útiles.
+    Reads the ``recinto`` layer in chunks, already in EPSG:4326 and with only the useful columns.
 
     Raises
     ------
     SigpacLoadError
-        Si falta la capa, alguna columna o el CRS.
+        If the layer, a column or the CRS is missing.
     """
     layers = set(pyogrio.list_layers(gpkg)[:, 0])
     if LAYER not in layers:
-        raise SigpacLoadError(f"{gpkg.name}: no tiene la capa '{LAYER}'.")
+        raise SigpacLoadError(f"{gpkg.name}: does not have the '{LAYER}' layer.")
 
     total = pyogrio.read_info(gpkg, layer=LAYER)["features"]
     for start in range(0, total, chunk_rows):
@@ -204,17 +205,17 @@ def read_chunks(gpkg: Path, chunk_rows: int = CHUNK_ROWS) -> Iterator[gpd.GeoDat
             rows=slice(start, min(start + chunk_rows, total)),
         )
         if chunk.crs is None:
-            raise SigpacLoadError(f"{gpkg.name}: la capa '{LAYER}' no tiene CRS.")
+            raise SigpacLoadError(f"{gpkg.name}: the '{LAYER}' layer has no CRS.")
 
         yield chunk.to_crs(STORAGE_SRID)
 
 
 def prepare_rows(chunk: gpd.GeoDataFrame) -> list[tuple[Any, ...]]:
     """
-    Convierte un bloque en filas para ``COPY`` (geometría como EWKB hexadecimal).
+    Converts a chunk into rows for ``COPY`` (geometry as hexadecimal EWKB).
 
-    ``land_cover`` se deriva del uso SIGPAC con ``normalize_sigpac_use``; el uso original se
-    conserva.
+    ``land_cover`` is derived from the SIGPAC use with ``normalize_sigpac_use``; the original use
+    is kept.
     """
     frame = pd.DataFrame(chunk.drop(columns="geometry"))
     for column in INTEGER_COLUMNS:
@@ -235,7 +236,7 @@ def prepare_rows(chunk: gpd.GeoDataFrame) -> list[tuple[Any, ...]]:
 
 
 def is_loaded(connection: _Connection, zip_name: str) -> bool:
-    """``True`` si el zip consta en ``fire.sigpac_loads``."""
+    """``True`` if the zip is recorded in ``fire.sigpac_loads``."""
     with connection.cursor() as cursor:
         cursor.execute(f"SELECT 1 FROM {LOADS_TABLE} WHERE source_file = %s", (zip_name,))
 
@@ -248,17 +249,17 @@ def _copy_statement() -> str:
 
 def load_gpkg(connection: _Connection, gpkg: Path, zip_name: str) -> LoadResult:
     """
-    Sustituye en una transacción los recintos de la provincia del GeoPackage.
+    Replaces, in one transaction, the parcels of the GeoPackage's province.
 
     Raises
     ------
     SigpacLoadError
-        Si el GeoPackage está vacío o mezcla provincias.
+        If the GeoPackage is empty or mixes provinces.
     """
     chunks = read_chunks(gpkg)
     first = next(chunks, None)
     if first is None or first.empty:
-        raise SigpacLoadError(f"{zip_name}: la capa '{LAYER}' está vacía.")
+        raise SigpacLoadError(f"{zip_name}: the '{LAYER}' layer is empty.")
 
     provincia = int(first["provincia"].iloc[0])
     total = 0
@@ -266,14 +267,14 @@ def load_gpkg(connection: _Connection, gpkg: Path, zip_name: str) -> LoadResult:
         cursor.execute(f"DELETE FROM {TABLE} WHERE provincia = %s", (provincia,))
         for chunk in _prepend(first, chunks):
             if set(chunk["provincia"].unique()) != {provincia}:
-                raise SigpacLoadError(f"{zip_name}: mezcla varias provincias.")
+                raise SigpacLoadError(f"{zip_name}: mixes several provinces.")
 
             with cursor.copy(_copy_statement()) as copy:
                 for row in prepare_rows(chunk):
                     copy.write_row(row)
 
             total += len(chunk)
-            LOGGER.info("  provincia %02d: %s recintos copiados", provincia, f"{total:,}")
+            LOGGER.info("  province %02d: %s parcels copied", provincia, f"{total:,}")
 
         cursor.execute(
             f"INSERT INTO {LOADS_TABLE} (source_file, provincia, n_recintos) "
@@ -295,21 +296,21 @@ def load_zip(
     connection: _Connection, zip_path: Path, force: bool = False, work_dir: Path | None = None
 ) -> LoadResult:
     """
-    Procesa un zip: lo salta si ya está cargado; si no, lo descomprime, lo carga y limpia.
+    Processes a zip: skips it if already loaded; otherwise unzips it, loads it and cleans up.
 
     Parameters
     ----------
     connection : _Connection
-        Conexión psycopg abierta (sin transacción pendiente).
+        Open psycopg connection (with no pending transaction).
     zip_path : Path
-        Zip provincial del FEGA.
+        Provincial FEGA zip.
     force : bool
-        Recarga aunque conste como cargado.
+        Reload even if it is recorded as loaded.
     work_dir : Path | None
-        Carpeta donde descomprimir (por defecto, una temporal del sistema).
+        Folder to unzip into (by default, a system temporary one).
     """
     if not force and is_loaded(connection, zip_path.name):
-        LOGGER.info("%s: ya cargado, se salta (usa --force para recargar).", zip_path.name)
+        LOGGER.info("%s: already loaded, skipping (use --force to reload).", zip_path.name)
 
         return LoadResult(zip_path.name, None, 0, skipped=True)
 
@@ -318,14 +319,14 @@ def load_zip(
         gpkg = extract_gpkg(zip_path, Path(tmp))
         result = load_gpkg(connection, gpkg, zip_path.name)
 
-    LOGGER.info("%s: %s recintos cargados.", zip_path.name, f"{result.n_recintos:,}")
+    LOGGER.info("%s: %s parcels loaded.", zip_path.name, f"{result.n_recintos:,}")
 
     return result
 
 
 @dataclass(frozen=True)
 class RemoteZip:
-    """Zip publicado por el FEGA: nombre ya decodificado, URL de descarga y tamaño en bytes."""
+    """Zip published by the FEGA: decoded name, download URL and size in bytes."""
 
     name: str
     url: str
@@ -334,18 +335,18 @@ class RemoteZip:
 
 def list_remote_zips(base_url: str = SIGPAC_BASE_URL) -> list[RemoteZip]:
     """
-    Lista los zips del directorio público del FEGA (listado HTML de IIS).
+    Lists the zips of the FEGA public directory (IIS HTML listing).
 
     Raises
     ------
     SigpacLoadError
-        Si no se puede leer el listado o no contiene zips.
+        If the listing cannot be read or contains no zips.
     """
     try:
         with urllib.request.urlopen(base_url, timeout=DOWNLOAD_TIMEOUT_S) as response:
             html = response.read().decode("utf-8", errors="replace")
     except OSError as error:
-        raise SigpacLoadError(f"No se pudo leer el listado {base_url}: {error}") from error
+        raise SigpacLoadError(f"Could not read the listing {base_url}: {error}") from error
 
     remote = []
     for line in html.split("<br>"):
@@ -362,17 +363,18 @@ def list_remote_zips(base_url: str = SIGPAC_BASE_URL) -> list[RemoteZip]:
             )
 
     if not remote:
-        raise SigpacLoadError(f"No hay zips en {base_url}.")
+        raise SigpacLoadError(f"No zips in {base_url}.")
 
     return remote
 
 
 def download_zip(remote: RemoteZip, dest_dir: Path) -> Path:
     """
-    Descarga un zip a ``dest_dir`` (con reintentos). Si ya está completo, no lo vuelve a bajar.
+    Downloads a zip into ``dest_dir`` (with retries). If it is already complete, it is not
+    downloaded again.
 
-    Se escribe en ``<nombre>.part`` y se renombra al terminar, de modo que nunca queda un zip
-    a medias con el nombre final.
+    It is written to ``<name>.part`` and renamed when finished, so a half-downloaded zip with the
+    final name never remains.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     target = dest_dir / remote.name
@@ -382,26 +384,26 @@ def download_zip(remote: RemoteZip, dest_dir: Path) -> Path:
     partial = target.with_name(target.name + ".part")
     for attempt in range(1, DOWNLOAD_RETRIES + 1):
         try:
-            LOGGER.info("%s: descargando (%s MB)...", remote.name, (remote.size or 0) // 10**6)
+            LOGGER.info("%s: downloading (%s MB)...", remote.name, (remote.size or 0) // 10**6)
             with urllib.request.urlopen(remote.url, timeout=DOWNLOAD_TIMEOUT_S) as response:
                 with partial.open("wb") as handle:
                     shutil.copyfileobj(response, handle, DOWNLOAD_BLOCK)
 
             if remote.size is not None and partial.stat().st_size != remote.size:
-                raise OSError("descarga incompleta")
+                raise OSError("incomplete download")
 
             return partial.replace(target)
         except OSError as error:
             LOGGER.warning(
-                "%s: intento %d/%d falló (%s)", remote.name, attempt, DOWNLOAD_RETRIES, error
+                "%s: attempt %d/%d failed (%s)", remote.name, attempt, DOWNLOAD_RETRIES, error
             )
             if attempt == DOWNLOAD_RETRIES:
                 partial.unlink(missing_ok=True)
-                raise SigpacLoadError(f"{remote.name}: no se pudo descargar ({error}).") from error
+                raise SigpacLoadError(f"{remote.name}: could not download ({error}).") from error
 
             time.sleep(2**attempt)
 
-    raise AssertionError("inalcanzable")
+    raise AssertionError("unreachable")
 
 
 def load_remote(
@@ -412,12 +414,12 @@ def load_remote(
     keep_zip: bool = False,
 ) -> LoadResult:
     """
-    Descarga (si hace falta) y carga un zip del FEGA; después borra el zip para ahorrar disco.
+    Downloads (if needed) and loads a FEGA zip; then deletes the zip to save disk space.
 
-    Los ya cargados se saltan **antes** de descargar nada.
+    Those already loaded are skipped **before** downloading anything.
     """
     if not force and is_loaded(connection, remote.name):
-        LOGGER.info("%s: ya cargado, se salta (usa --force para recargar).", remote.name)
+        LOGGER.info("%s: already loaded, skipping (use --force to reload).", remote.name)
 
         return LoadResult(remote.name, None, 0, skipped=True)
 

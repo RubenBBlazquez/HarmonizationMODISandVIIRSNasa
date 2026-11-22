@@ -1,18 +1,18 @@
 """
-Descarga los recintos SIGPAC del FEGA y los carga en PostGIS, provincia a provincia.
+Downloads the SIGPAC parcels from the FEGA and loads them into PostGIS, province by province.
 
     python scripts/load_sigpac.py
 
-Sin argumentos lista los 50 zips provinciales de ``SIGPAC_BASE_URL`` y, de uno en uno, hace:
-descargar -> descomprimir -> leer con geopandas -> cargar en ``fire.sigpac_recintos`` -> borrar
-zip y GeoPackage. Las provincias ya cargadas se saltan antes de descargar, así que se puede
-interrumpir y volver a lanzar. Si un zip falla se informa y se sigue con el siguiente.
+Without arguments it lists the 50 provincial zips of ``SIGPAC_BASE_URL`` and, one by one, does:
+download -> unzip -> read with geopandas -> load into ``fire.sigpac_recintos`` -> delete the
+zip and the GeoPackage. Provinces already loaded are skipped before downloading, so it can be
+interrupted and launched again. If a zip fails it is reported and the next one is processed.
 
-Opcionales:
-    python scripts/load_sigpac.py data/sigpac/    # usa zips locales en vez de descargar
-    python scripts/load_sigpac.py --force         # recarga aunque ya estén cargadas
-    python scripts/load_sigpac.py --only 20 28    # solo esas provincias (código INE)
-    python scripts/load_sigpac.py --keep-zips     # conserva los zips descargados
+Optional:
+    python scripts/load_sigpac.py data/sigpac/    # uses local zips instead of downloading
+    python scripts/load_sigpac.py --force         # reloads even if already loaded
+    python scripts/load_sigpac.py --only 20 28    # only those provinces (INE code)
+    python scripts/load_sigpac.py --keep-zips     # keeps the downloaded zips
 """
 
 import argparse
@@ -23,8 +23,8 @@ from pathlib import Path
 from _paths import ETLS_DIR
 
 from fire_etl.config import load_config
-from fire_etl.postgres_loader import apply_schema, describe_url
-from fire_etl.sigpac_loader import (
+from fire_etl.load.postgres import apply_schema, describe_url
+from fire_etl.load.sigpac import (
     SIGPAC_BASE_URL,
     SigpacLoadError,
     find_zips,
@@ -34,20 +34,22 @@ from fire_etl.sigpac_loader import (
 )
 
 CONFIG_FILE = ETLS_DIR / "config" / "default.yaml"
-DOWNLOAD_DIR = ETLS_DIR / "data" / "sigpac"  # ignorado por git
+DOWNLOAD_DIR = ETLS_DIR / "data" / "sigpac"  # ignored by git
 CONNECT_TIMEOUT_S = 5
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("paths", nargs="*", type=Path, help="zips o carpetas locales (opcional)")
-    parser.add_argument("--url", help="URL de PostgreSQL (por defecto, database.url del YAML)")
-    parser.add_argument("--base-url", default=SIGPAC_BASE_URL, help="listado de zips del FEGA")
+    parser.add_argument("paths", nargs="*", type=Path, help="local zips or folders (optional)")
+    parser.add_argument("--url", help="PostgreSQL URL (by default, database.url of the YAML)")
+    parser.add_argument("--base-url", default=SIGPAC_BASE_URL, help="listing of the FEGA zips")
     parser.add_argument("--download-dir", type=Path, default=DOWNLOAD_DIR)
-    parser.add_argument("--only", nargs="+", metavar="PROV", help="códigos de provincia (20 28)")
-    parser.add_argument("--force", action="store_true", help="recarga los ya cargados")
-    parser.add_argument("--keep-zips", action="store_true", help="no borra los zips descargados")
-    parser.add_argument("--work-dir", type=Path, help="carpeta donde descomprimir (disco)")
+    parser.add_argument("--only", nargs="+", metavar="PROV", help="province codes (20 28)")
+    parser.add_argument("--force", action="store_true", help="reload the ones already loaded")
+    parser.add_argument(
+        "--keep-zips", action="store_true", help="do not delete the downloaded zips"
+    )
+    parser.add_argument("--work-dir", type=Path, help="folder to unzip into (disk)")
 
     return parser.parse_args()
 
@@ -70,14 +72,14 @@ def main() -> int:
         items = [i for i in items if i.name[:3] in wanted]
 
     if not items:
-        logging.error("No hay zips que procesar.")
+        logging.error("No zips to process.")
         return 2
 
     import psycopg
 
     failed: list[str] = []
     loaded = skipped = 0
-    logging.info("PostGIS: conectando a %s...", describe_url(url))
+    logging.info("PostGIS: connecting to %s...", describe_url(url))
     with psycopg.connect(url, connect_timeout=CONNECT_TIMEOUT_S, autocommit=True) as connection:
         apply_schema(connection)
         for number, item in enumerate(items, start=1):
@@ -89,17 +91,17 @@ def main() -> int:
                     result = load_remote(
                         connection, item, args.download_dir, args.force, args.keep_zips
                     )
-            except Exception as error:  # un zip malo no debe parar el resto
-                logging.error("%s: FALLO (%s)", item.name, error)
+            except Exception as error:  # one bad zip must not stop the rest
+                logging.error("%s: FAILED (%s)", item.name, error)
                 failed.append(item.name)
                 continue
 
             skipped += result.skipped
             loaded += not result.skipped
 
-    print(f"\nCargados: {loaded} | saltados: {skipped} | fallidos: {len(failed)}")
+    print(f"\nLoaded: {loaded} | skipped: {skipped} | failed: {len(failed)}")
     for name in failed:
-        print(f"  FALLO {name}")
+        print(f"  FAILED {name}")
     print("Land cover: SIGPAC (FEGA / Ministerio de Agricultura, Pesca y Alimentación), CC BY 4.0")
 
     return 1 if failed else 0

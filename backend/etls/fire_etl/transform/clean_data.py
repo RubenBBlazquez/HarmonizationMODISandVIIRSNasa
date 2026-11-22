@@ -1,44 +1,43 @@
 """
-Datos finales (``clean_data``): el resultado depurado del pipeline, listo para usar.
+Final data (``clean_data``): the cleaned result of the pipeline, ready to use.
 
-Se generan cuatro ficheros pensados para sus consumidores:
+They are built here and :mod:`fire_etl.load.clean_data` writes them. The files are meant for
+their consumers:
 
-- ``fire_events.geojson``: un punto (centroide) por evento. Capa principal del **mapa**.
-- ``fire_event_areas.geojson``: la envolvente de cada evento (polígono), para dibujar su extensión.
-- ``fire_detections.geojson``: las detecciones que forman los eventos (puntos), para el detalle.
-- ``fire_events.json``: una ficha plana por evento con un resumen en texto y la serie temporal de
-  FRP. Pensado para el **chatbot** (búsqueda, filtrado y respuestas).
-- ``metadata.json``: generación, recuentos, parámetros, fuentes y avisos.
+- ``fire_events.geojson``: one point (centroid) per event. Main layer of the **map**.
+- ``fire_event_areas.geojson``: the envelope of each event (polygon), to draw its extent.
+- ``fire_detections.geojson``: the detections that make up the events (points), for the detail.
+- ``fire_events.json``: a flat record per event with a text summary and the FRP time series.
+  Meant for the **chatbot** (search, filtering and answers).
+- ``metadata.json``: generation, counts, parameters, sources and warnings.
 
-Solo contiene lo que sirve a quien consume el dato: sin geometrías duplicadas, sin columnas
-intermedias del algoritmo y sin detecciones que no pertenezcan a ningún evento. Todas las
-fechas están en UTC (``YYYY-MM-DDTHH:MM:SSZ``) y las coordenadas en EPSG:4326 (``lon, lat`` en
-GeoJSON). El área es la huella de los píxeles más el buffer: **no es superficie quemada**.
+It only contains what is useful to whoever consumes the data: no duplicated geometries, no
+intermediate columns of the algorithm and no detections that do not belong to any event. All
+dates are in UTC (``YYYY-MM-DDTHH:MM:SSZ``) and coordinates in EPSG:4326 (``lon, lat`` in
+GeoJSON). The area is the footprint of the pixels plus the buffer: **it is not burned area**.
+
+The text values of the output (event summary, notes, labels) are intentionally in Spanish: they
+are content for the end users, not documentation of the code.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.geometry import Point, mapping
 
 from fire_etl.config import PipelineConfig
-from fire_etl.frp_classification import CATEGORY_HIGH, CATEGORY_LOW, CATEGORY_MEDIUM
-from fire_etl.outputs import PipelineTables
-
-EVENTS_GEOJSON = "fire_events.geojson"
-AREAS_GEOJSON = "fire_event_areas.geojson"
-DETECTIONS_GEOJSON = "fire_detections.geojson"
-EVENTS_JSON = "fire_events.json"
-METADATA_JSON = "metadata.json"
+from fire_etl.transform.processing.frp_classification import (
+    CATEGORY_HIGH,
+    CATEGORY_LOW,
+    CATEGORY_MEDIUM,
+)
+from fire_etl.transform.tables import PipelineTables
 
 COORD_DECIMALS = 5
 M2_PER_KM2 = 1_000_000
@@ -63,7 +62,7 @@ LAND_COVER_ES = {
     "other": "otros usos",
 }
 
-# Propiedades de cada fichero (las mismas columnas, en este orden).
+# Properties of each file (the same columns, in this order).
 EVENT_COLUMNS = (
     "event_id",
     "status",
@@ -116,18 +115,18 @@ SIGPAC_SOURCE = "Land cover: SIGPAC (FEGA / Ministerio de Agricultura, Pesca y A
 @dataclass(frozen=True)
 class CleanData:
     """
-    Datos finales listos para el mapa y el chatbot.
+    Final data ready for the map and the chatbot.
 
     Attributes
     ----------
     events : pd.DataFrame
-        Una fila por evento: ``EVENT_COLUMNS`` + ``frp_series`` (lista de dicts).
+        One row per event: ``EVENT_COLUMNS`` + ``frp_series`` (list of dicts).
     areas : list
-        Envolvente (polígono en EPSG:4326) de cada evento, alineada con ``events``.
+        Envelope (polygon in EPSG:4326) of each event, aligned with ``events``.
     detections : pd.DataFrame
-        Detecciones de los eventos (``DETECTION_COLUMNS``).
+        Detections of the events (``DETECTION_COLUMNS``).
     metadata : dict[str, Any]
-        Generación, recuentos, parámetros, fuentes y avisos.
+        Generation, counts, parameters, sources and warnings.
     """
 
     events: pd.DataFrame
@@ -137,7 +136,7 @@ class CleanData:
 
 
 def _to_python(value: Any) -> Any:
-    """Convierte valores de pandas/numpy a tipos JSON (``None`` para los nulos)."""
+    """Converts pandas/numpy values to JSON types (``None`` for nulls)."""
     if isinstance(value, (list, dict)):
         return value
 
@@ -154,7 +153,8 @@ def _to_python(value: Any) -> Any:
     return value
 
 
-def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+def to_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """Converts a DataFrame into a list of dicts with JSON types."""
     return [
         {key: _to_python(value) for key, value in row.items()}
         for row in frame.to_dict(orient="records")
@@ -172,7 +172,7 @@ def _frp_category(classes: pd.Series) -> pd.Series:
 
 
 def _event_detection_facts(tables: PipelineTables) -> pd.DataFrame:
-    """Categoría de FRP máxima y cobertura del suelo dominante de cada evento."""
+    """Maximum FRP category and dominant land cover of each event."""
     columns = ["detection_id", "frp_class"]
     if "land_cover" in tables.detections.columns:
         columns.append("land_cover")
@@ -187,7 +187,7 @@ def _event_detection_facts(tables: PipelineTables) -> pd.DataFrame:
 
 
 def _summary(row: pd.Series) -> str:
-    """Frase en castellano que resume el evento (para el chatbot y los popups del mapa)."""
+    """Sentence in Spanish that summarizes the event (for the chatbot and the map popups)."""
     sensors = " + ".join(str(row["sensors"]).split(","))
     category = FRP_CATEGORY_ES.get(row["frp_category"], "sin clasificar")
     text = (
@@ -209,7 +209,7 @@ def _summary(row: pd.Series) -> str:
 
 
 def _clean_series(raw: str) -> list[dict[str, Any]]:
-    """Serie temporal de FRP por observación, sin ids internos y con fechas en formato ``Z``."""
+    """FRP time series per observation, without internal ids and with dates in ``Z`` format."""
     return [
         {
             "window_start": pd.Timestamp(item["window_start"]).strftime(TIMESTAMP_FORMAT),
@@ -301,22 +301,22 @@ def _clean_detections(tables: PipelineTables, storage_crs: str) -> pd.DataFrame:
 
 def build_clean_data(tables: PipelineTables, config: PipelineConfig) -> CleanData:
     """
-    Construye los datos finales a partir de las tablas del pipeline.
+    Builds the final data from the pipeline tables.
 
-    Solo se incluyen los eventos y las detecciones que pertenecen a un evento (las
-    observaciones low aisladas y el ruido por FRP no llegan aquí).
+    Only the events and the detections that belong to an event are included (isolated low
+    observations and FRP noise do not get here).
 
     Parameters
     ----------
     tables : PipelineTables
-        Resultado de :func:`fire_etl.pipeline.process_detections`.
+        Result of :func:`fire_etl.transform.main.process_detections`.
     config : PipelineConfig
-        Configuración (CRS de almacenamiento y fuentes).
+        Configuration (storage CRS and sources).
 
     Returns
     -------
     CleanData
-        Eventos, áreas, detecciones y metadatos.
+        Events, areas, detections and metadata.
     """
     storage_crs = config.geometry.storage_crs
     events, areas = _clean_events(tables, storage_crs)
@@ -335,58 +335,3 @@ def build_clean_data(tables: PipelineTables, config: PipelineConfig) -> CleanDat
     }
 
     return CleanData(events=events, areas=areas, detections=detections, metadata=metadata)
-
-
-def _feature_collection(
-    properties: pd.DataFrame, geometries: Sequence[Any], columns: Sequence[str]
-) -> dict[str, Any]:
-    features = [
-        {"type": "Feature", "geometry": mapping(geometry), "properties": props}
-        for props, geometry in zip(_records(properties.loc[:, list(columns)]), geometries)
-    ]
-
-    return {"type": "FeatureCollection", "features": features}
-
-
-def _points(frame: pd.DataFrame) -> list[Point]:
-    return [Point(lon, lat) for lon, lat in zip(frame["lon"], frame["lat"])]
-
-
-def _dump(data: Any, path: Path, indent: int | None = None) -> None:
-    """Escribe JSON compacto (los ficheros de datos son grandes); ``indent`` solo para leerlo."""
-    separators = (",", ": ") if indent else (",", ":")
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=indent, separators=separators)
-
-
-def write_clean_data(clean: CleanData, directory: str | Path) -> Path:
-    """
-    Escribe los ficheros de ``clean_data`` en ``directory`` (se crea si no existe).
-
-    Parameters
-    ----------
-    clean : CleanData
-        Resultado de :func:`build_clean_data`.
-    directory : str | Path
-        Carpeta de salida.
-
-    Returns
-    -------
-    Path
-        La carpeta de salida.
-    """
-    output = Path(directory)
-    output.mkdir(parents=True, exist_ok=True)
-    events, detections = clean.events, clean.detections
-
-    _dump(_feature_collection(events, _points(events), EVENT_COLUMNS), output / EVENTS_GEOJSON)
-    area_columns = ["event_id", "status", "frp_category", "footprint_area_km2"]
-    _dump(_feature_collection(events, clean.areas, area_columns), output / AREAS_GEOJSON)
-    _dump(
-        _feature_collection(detections, _points(detections), DETECTION_COLUMNS),
-        output / DETECTIONS_GEOJSON,
-    )
-    _dump(_records(events.loc[:, [*EVENT_COLUMNS, "frp_series"]]), output / EVENTS_JSON)
-    _dump(clean.metadata, output / METADATA_JSON, indent=2)
-
-    return output

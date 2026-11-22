@@ -1,10 +1,9 @@
 """
-Configuración del pipeline de fusión MODIS + VIIRS.
+Configuration of the MODIS + VIIRS fusion pipeline.
 
-Los parámetros del algoritmo se definen como dataclasses inmutables cuyos valores por defecto
-coinciden con ``backend/etls/config/default.yaml``. Un fichero YAML puede sobrescribir cualquier
-subconjunto de claves con :func:`load_config`.
-
+The algorithm parameters are defined as immutable dataclasses whose default values match
+``backend/etls/config/default.yaml``. A YAML file can override any subset of keys through
+:func:`load_config`.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ import yaml
 
 
 class WindowMode(StrEnum):
-    """Modo de partición temporal de las detecciones."""
+    """Time partitioning mode for detections."""
 
     DAY_UTC = "day_utc"
     HOURS_12 = "hours_12"
@@ -28,7 +27,7 @@ class WindowMode(StrEnum):
 
 
 class InvalidConfigError(ValueError):
-    """La configuración contiene claves o valores no válidos."""
+    """The configuration contains invalid keys or values."""
 
 
 def _default_viirs_mapping() -> dict[str, str]:
@@ -45,14 +44,14 @@ def _default_viirs_mapping() -> dict[str, str]:
 @dataclass(frozen=True)
 class AreaOfInterestConfig:
     """
-    Área de interés en EPSG:4326.
+    Area of interest in EPSG:4326.
 
     Attributes
     ----------
     bbox : tuple[float, float, float, float] | None
         ``(min_lon, min_lat, max_lon, max_lat)``.
     polygon_wkt : str | None
-        Polígono en WKT. Excluyente con ``bbox``.
+        Polygon in WKT. Mutually exclusive with ``bbox``.
     """
 
     bbox: tuple[float, float, float, float] | None = None
@@ -60,11 +59,11 @@ class AreaOfInterestConfig:
 
     def __post_init__(self) -> None:
         if self.bbox is not None and self.polygon_wkt is not None:
-            raise InvalidConfigError("area_of_interest: usa bbox o polygon_wkt, no ambos")
+            raise InvalidConfigError("area_of_interest: use bbox or polygon_wkt, not both")
 
         if self.bbox is not None:
             if len(self.bbox) != 4:
-                raise InvalidConfigError("area_of_interest.bbox debe tener 4 valores")
+                raise InvalidConfigError("area_of_interest.bbox must have 4 values")
 
             object.__setattr__(self, "bbox", tuple(float(value) for value in self.bbox))
 
@@ -76,21 +75,21 @@ class AreaOfInterestConfig:
 @dataclass(frozen=True)
 class ExclusionZone:
     """
-    Zona y fechas con fuentes térmicas que no son incendios forestales (p. ej. una erupción).
+    Zone and dates with heat sources that are not wildfires (e.g. a volcanic eruption).
 
-    Las detecciones dentro del recuadro y de las fechas se marcan como no válidas (no se
-    descartan) con ``skip_reason = reason``.
+    Detections inside the box and the dates are flagged as invalid (not discarded) with
+    ``skip_reason = reason``.
 
     Attributes
     ----------
     name : str
-        Nombre descriptivo (solo para el registro).
+        Descriptive name (for logging only).
     bbox : tuple[float, float, float, float]
-        ``(min_lon, min_lat, max_lon, max_lat)`` en EPSG:4326.
+        ``(min_lon, min_lat, max_lon, max_lat)`` in EPSG:4326.
     start, end : date | None
-        Fechas UTC, ambas incluidas; ``None`` = sin límite por ese lado.
+        UTC dates, both inclusive; ``None`` = no limit on that side.
     reason : str
-        Valor de ``skip_reason`` de las detecciones marcadas.
+        ``skip_reason`` value of the flagged detections.
     """
 
     name: str
@@ -101,7 +100,7 @@ class ExclusionZone:
 
     def __post_init__(self) -> None:
         if len(self.bbox) != 4:
-            raise InvalidConfigError(f"exclusion_zones[{self.name}].bbox debe tener 4 valores")
+            raise InvalidConfigError(f"exclusion_zones[{self.name}].bbox must have 4 values")
 
         object.__setattr__(self, "bbox", tuple(float(value) for value in self.bbox))
         for field_name in ("start", "end"):
@@ -118,7 +117,7 @@ def _default_non_wildfire_types() -> dict[int, str]:
 
 
 def _default_frp_thresholds_mw() -> dict[str, dict[str, float]]:
-    """Umbrales de FRP para ruido y categorías por instrumento, en MW."""
+    """FRP thresholds for noise and categories per instrument, in MW."""
     return {
         "VIIRS": {
             "min_day": 3.7,
@@ -137,34 +136,35 @@ def _default_frp_thresholds_mw() -> dict[str, dict[str, float]]:
 
 @dataclass(frozen=True)
 class ValidationConfig:
-    """Rangos válidos de los campos de entrada."""
+    """Valid ranges of the input fields."""
 
     lat_range: tuple[float, float] = (-90.0, 90.0)
     lon_range: tuple[float, float] = (-180.0, 180.0)
     frp_min: float = 0.0
     allowed_daynight: tuple[str, ...] = ("D", "N")
-    # Marca como no válidas (``is_valid=False``, ``skip_reason="below_frp_threshold"``) las
-    # detecciones por debajo del FRP mínimo de su instrumento y de día/noche. Los umbrales están
-    # en el YAML; los mínimos por defecto se ajustan a la sensibilidad publicada de píxeles
-    # pequeños.
+    # Flags as invalid (``is_valid=False``, ``skip_reason="below_frp_threshold"``) the
+    # detections below the minimum FRP of their instrument and day/night. The thresholds are
+    # in the YAML; the default minimums match the published sensitivity for small
+    # pixels.
     apply_frp_thresholds: bool = True
-    # Un foco en bosque (``is_forest``) se mantiene válido aunque su FRP esté por debajo del mínimo
-    # (categoría "low"): el riesgo es alto y debe poder alertar. En agricultura se sigue
-    # descartando por FRP bajo. Necesita la cobertura del suelo (SIGPAC) activada.
+    # A forest hotspot (``is_forest``) stays valid even if its FRP is below the minimum
+    # ("low" category): the risk is high and it must be able to raise an alert. In agriculture
+    # low FRP is still discarded. Requires land cover (SIGPAC) to be enabled.
     keep_forest_below_frp: bool = True
     frp_thresholds_mw: dict[str, dict[str, float]] = field(
         default_factory=_default_frp_thresholds_mw
     )
-    # Nombres de satélite que se unifican con los de los ficheros NRT (el archivo anual usa
-    # "Aqua" / "Terra"; los NRT, "A" / "T"), para que el detection_id no duplique detecciones.
+    # Satellite names that are unified with those of the NRT files (the annual archive uses
+    # "Aqua" / "Terra"; the NRT ones, "A" / "T"), so that detection_id does not duplicate
+    # detections.
     satellite_aliases: dict[str, str] = field(default_factory=lambda: {"Aqua": "A", "Terra": "T"})
-    # Marca como no válidas las detecciones que no son incendios de vegetación: el campo ``type``
-    # de FIRMS (solo en los ficheros anuales) distingue 0 = incendio de vegetación presunto de
-    # 1 = volcán activo, 2 = fuente terrestre estática (industria) y 3 = detección en el mar.
+    # Flags as invalid the detections that are not vegetation fires: the FIRMS ``type`` field
+    # (only in the annual files) distinguishes 0 = presumed vegetation fire from
+    # 1 = active volcano, 2 = static land source (industry) and 3 = offshore detection.
     apply_source_filters: bool = True
     non_wildfire_types: dict[int, str] = field(default_factory=_default_non_wildfire_types)
-    # Zonas y fechas concretas que no son incendios forestales y que ``type`` no separa (p. ej. la
-    # erupción de La Palma de 2021, clasificada casi toda como incendio de vegetación).
+    # Specific zones and dates that are not wildfires and that ``type`` does not separate (e.g. the
+    # 2021 La Palma eruption, classified almost entirely as vegetation fire).
     exclusion_zones: tuple[ExclusionZone, ...] = ()
 
     def __post_init__(self) -> None:
@@ -178,14 +178,14 @@ class ValidationConfig:
         expected_instruments = {"VIIRS", "MODIS"}
         if set(self.frp_thresholds_mw) != expected_instruments:
             raise InvalidConfigError(
-                "validation.frp_thresholds_mw: se requieren exactamente VIIRS y MODIS"
+                "validation.frp_thresholds_mw: exactly VIIRS and MODIS are required"
             )
 
         thresholds: dict[str, dict[str, float]] = {}
         for instrument, values in self.frp_thresholds_mw.items():
             if set(values) != required_keys:
                 raise InvalidConfigError(
-                    f"validation.frp_thresholds_mw.{instrument}: claves {sorted(required_keys)}"
+                    f"validation.frp_thresholds_mw.{instrument}: keys {sorted(required_keys)}"
                 )
             normalized = {key: float(value) for key, value in values.items()}
             if (
@@ -197,7 +197,7 @@ class ValidationConfig:
                 or normalized["limit_low"] > normalized["limit_medium"]
             ):
                 raise InvalidConfigError(
-                    f"validation.frp_thresholds_mw.{instrument}: límites inconsistentes"
+                    f"validation.frp_thresholds_mw.{instrument}: inconsistent limits"
                 )
             thresholds[instrument] = normalized
         object.__setattr__(self, "frp_thresholds_mw", thresholds)
@@ -206,20 +206,20 @@ class ValidationConfig:
 @dataclass(frozen=True)
 class ConfidenceConfig:
     """
-    Reglas de normalización y fusión de la confianza.
+    Rules for normalizing and fusing confidence.
 
     Attributes
     ----------
     modis_low_max : int
-        Valor máximo (incluido) de confianza MODIS considerado ``low``.
+        Maximum value (inclusive) of MODIS confidence considered ``low``.
     modis_nominal_max : int
-        Valor máximo (incluido) considerado ``nominal``; por encima es ``high``.
+        Maximum value (inclusive) considered ``nominal``; above it is ``high``.
     viirs_mapping : dict[str, str]
-        Correspondencia (en minúsculas) entre el valor VIIRS original y el nivel normalizado.
+        Mapping (lowercase) between the original VIIRS value and the normalized level.
     single_sensor_high_level : str
-        Nivel fusionado para una observación de un solo sensor con confianza alta.
+        Fused level for a single-sensor observation with high confidence.
     discard_isolated_low : bool
-        Si es ``True``, las observaciones low aisladas no se enlazan a eventos.
+        If ``True``, isolated low observations are not linked to events.
     """
 
     modis_low_max: int = 29
@@ -230,31 +230,31 @@ class ConfidenceConfig:
 
     def __post_init__(self) -> None:
         if not 0 <= self.modis_low_max < self.modis_nominal_max < 100:
-            raise InvalidConfigError("confidence: se requiere 0 <= low_max < nominal_max < 100")
+            raise InvalidConfigError("confidence: 0 <= low_max < nominal_max < 100 is required")
 
         if self.single_sensor_high_level not in ("medium", "high"):
             raise InvalidConfigError("confidence.single_sensor_high_level: medium | high")
 
         invalid_levels = set(self.viirs_mapping.values()) - {"low", "nominal", "high"}
         if invalid_levels:
-            raise InvalidConfigError(f"confidence.viirs_mapping: niveles {invalid_levels}")
+            raise InvalidConfigError(f"confidence.viirs_mapping: levels {invalid_levels}")
 
 
 @dataclass(frozen=True)
 class BiomassConfig:
     """
-    Estimación de biomasa a partir de la potencia radiativa (FRP).
+    Biomass estimation from fire radiative power (FRP).
 
     Attributes
     ----------
     coefficient_kg_per_mj : float
-        Biomasa consumida por unidad de energía radiada (kg/MJ). Como el FRP está en MW
-        (= MJ/s), ``FRP * coeficiente`` da una **tasa de combustión de biomasa en kg/s**.
+        Biomass consumed per unit of radiated energy (kg/MJ). Since FRP is in MW
+        (= MJ/s), ``FRP * coefficient`` gives a **biomass burning rate in kg/s**.
     pass_gap_minutes : float
-        Detecciones de un evento separadas menos de este tiempo son de la misma pasada de satélite.
+        Detections of an event closer together than this time belong to the same satellite pass.
     pass_window_hours : float
-        Horas que se supone que representa una pasada (como máximo; se reparte a la mitad con la
-        pasada vecina) al integrar el FRP en el tiempo para estimar la biomasa quemada.
+        Hours a pass is assumed to represent (at most; split in half with the neighboring
+        pass) when integrating FRP over time to estimate the burned biomass.
     """
 
     coefficient_kg_per_mj: float = 0.368
@@ -263,38 +263,38 @@ class BiomassConfig:
 
     def __post_init__(self) -> None:
         if self.coefficient_kg_per_mj <= 0:
-            raise InvalidConfigError("biomass.coefficient_kg_per_mj debe ser > 0")
+            raise InvalidConfigError("biomass.coefficient_kg_per_mj must be > 0")
 
         if self.pass_gap_minutes <= 0 or self.pass_window_hours <= 0:
-            raise InvalidConfigError("biomass: pass_gap_minutes y pass_window_hours deben ser > 0")
+            raise InvalidConfigError("biomass: pass_gap_minutes and pass_window_hours must be > 0")
 
 
 @dataclass(frozen=True)
 class GeometryConfig:
-    """CRS de cálculo/almacenamiento, tamaño nominal del píxel y buffer del footprint."""
+    """Calculation/storage CRS, nominal pixel size and footprint buffer."""
 
     metric_crs: str = "EPSG:25830"
     storage_crs: str = "EPSG:4326"
     footprint_buffer_m: float = 400.0
-    # Lado nominal del píxel de cada sensor, en km: MODIS 1 km, VIIRS 375 m. Con él se rellenan
-    # ``area_width_km`` y ``area_height_km`` de cada detección.
+    # Nominal pixel side of each sensor, in km: MODIS 1 km, VIIRS 375 m. It fills in
+    # ``area_width_km`` and ``area_height_km`` of each detection.
     pixel_size_km: dict[str, float] = field(default_factory=lambda: {"MODIS": 1.0, "VIIRS": 0.375})
 
     def __post_init__(self) -> None:
         if self.footprint_buffer_m < 0:
-            raise InvalidConfigError("geometry.footprint_buffer_m debe ser >= 0")
+            raise InvalidConfigError("geometry.footprint_buffer_m must be >= 0")
 
         if set(self.pixel_size_km) != {"MODIS", "VIIRS"} or any(
             size <= 0 for size in self.pixel_size_km.values()
         ):
             raise InvalidConfigError(
-                "geometry.pixel_size_km necesita MODIS y VIIRS con valores > 0 (km)"
+                "geometry.pixel_size_km needs MODIS and VIIRS with values > 0 (km)"
             )
 
 
 @dataclass(frozen=True)
 class WindowConfig:
-    """Partición temporal."""
+    """Time partitioning."""
 
     mode: WindowMode = WindowMode.DAY_UTC
 
@@ -304,7 +304,7 @@ class WindowConfig:
 
 @dataclass(frozen=True)
 class LinkingConfig:
-    """Enlace de observaciones entre ventanas consecutivas."""
+    """Linking of observations across consecutive windows."""
 
     max_distance_m: float = 1000.0
     max_window_gap: int = 1
@@ -316,7 +316,7 @@ class LinkingConfig:
 
 @dataclass(frozen=True)
 class EventConfig:
-    """Estado de los eventos."""
+    """Event status."""
 
     inactive_after_hours: float = 48.0
     reference_time: datetime | None = None
@@ -326,15 +326,15 @@ class EventConfig:
             object.__setattr__(self, "reference_time", datetime.fromisoformat(self.reference_time))
 
         if self.reference_time is not None and self.reference_time.tzinfo is None:
-            raise InvalidConfigError("events.reference_time debe incluir zona horaria (UTC)")
+            raise InvalidConfigError("events.reference_time must include a time zone (UTC)")
 
 
 @dataclass(frozen=True)
 class OutputConfig:
-    """Destino de las salidas."""
+    """Output destination."""
 
     directory: str = "output"
-    # Datos finales depurados para el mapa y el chatbot (GeoJSON + JSON).
+    # Cleaned final data for the map and the chatbot (GeoJSON + JSON).
     clean_data_directory: str = "clean_data"
     use_previous_state: bool = True
 
@@ -342,17 +342,17 @@ class OutputConfig:
 @dataclass(frozen=True)
 class DatabaseConfig:
     """
-    Carga de las tablas del pipeline en PostGIS (además de los GeoParquet).
+    Loading of the pipeline tables into PostGIS (in addition to the GeoParquet files).
 
     Attributes
     ----------
     enabled : bool
-        Si es ``True``, inserta las tablas tras escribir los ficheros.
+        If ``True``, inserts the tables after writing the files.
     url : str | None
-        URL de conexión fija (PostgreSQL/PostGIS del ``docker-compose.yml``, solo desarrollo
-        local).
+        Fixed connection URL (PostgreSQL/PostGIS from ``docker-compose.yml``, local
+        development only).
     apply_schema : bool
-        Reaplica el esquema SQL (idempotente) antes de cada carga.
+        Reapplies the SQL schema (idempotent) before each load.
     """
 
     enabled: bool = False
@@ -367,25 +367,25 @@ def _default_download_sources() -> dict[str, int]:
 @dataclass(frozen=True)
 class DownloadConfig:
     """
-    Descarga del archivo anual de NASA FIRMS por país (público, sin cuenta ni token).
+    Download of the NASA FIRMS annual archive per country (public, no account or token).
 
     Attributes
     ----------
     base_url : str
-        Raíz del archivo: ``<base_url>/<fuente>/<año>/<fuente>_<año>_<país>.csv``.
+        Archive root: ``<base_url>/<source>/<year>/<source>_<year>_<country>.csv``.
     country : str
-        País tal como lo nombra FIRMS (``Spain``).
+        Country as named by FIRMS (``Spain``).
     sources : dict[str, int]
-        Fuente -> primer año con datos (MODIS desde 2000, VIIRS S-NPP desde 2012, NOAA-20
-        desde 2018).
+        Source -> first year with data (MODIS since 2000, VIIRS S-NPP since 2012, NOAA-20
+        since 2018).
     start_year : int
-        Primer año a descargar.
+        First year to download.
     end_year : int | None
-        Último año; ``None`` = último año completo (el año en curso aún no está en el archivo).
+        Last year; ``None`` = last complete year (the current year is not in the archive yet).
     directory : str
-        Carpeta destino de los CSV.
+        Destination folder of the CSV files.
     timeout_s, retries, retry_wait_s : float, int, float
-        Tiempo máximo por petición, reintentos y espera (se multiplica por el intento).
+        Maximum time per request, retries and wait (multiplied by the attempt number).
     """
 
     base_url: str = "https://firms.modaps.eosdis.nasa.gov/data/country"
@@ -400,42 +400,45 @@ class DownloadConfig:
 
     def __post_init__(self) -> None:
         if self.end_year is not None and self.end_year < self.start_year:
-            raise InvalidConfigError("download.end_year debe ser >= start_year")
+            raise InvalidConfigError("download.end_year must be >= start_year")
 
         if self.retries < 1 or self.timeout_s <= 0 or not self.sources:
-            raise InvalidConfigError("download: retries >= 1, timeout_s > 0 y alguna fuente")
+            raise InvalidConfigError(
+                "download: retries >= 1, timeout_s > 0 and at least one source"
+            )
 
 
 @dataclass(frozen=True)
 class NrtConfig:
     """
-    Descarga de los ficheros casi en tiempo real (NRT) de NASA FIRMS para el año en curso.
+    Download of the NASA FIRMS near-real-time (NRT) files for the current year.
 
-    El archivo anual (``download``) solo llega hasta el último año completo; el NRT cubre los
-    últimos ~60 días. Necesita un token de Earthdata en la variable de entorno ``token_env``
-    (el token **nunca** va en este fichero).
+    The annual archive (``download``) only goes up to the last complete year; the NRT covers the
+    last ~60 days. It needs an Earthdata token in the ``token_env`` environment variable
+    (the token **never** goes in this file).
 
     Attributes
     ----------
     enabled : bool
-        Si es ``False`` no se descarga el NRT.
+        If ``False`` the NRT is not downloaded.
     base_url : str
-        Raíz del archivo NRT; los ficheros están en ``<base_url>/<fuente>/<región>/``.
+        NRT archive root; the files are in ``<base_url>/<source>/<region>/``.
     region : str
-        Región de los ficheros NRT (``Europe``).
+        Region of the NRT files (``Europe``).
     sources : tuple[str, ...]
-        Carpetas de cada sensor/satélite.
+        Folders of each sensor/satellite.
     token_env : str
-        Nombre de la variable de entorno con el token (``Authorization: Bearer``). Tiene prioridad.
+        Name of the environment variable with the token (``Authorization: Bearer``). Takes
+        priority.
     token_file : str
-        Fichero local con el token (una línea), **ignorado por git**, que se usa si no hay variable
-        de entorno. Una ruta relativa se resuelve respecto a la carpeta ``etls``.
+        Local file with the token (one line), **ignored by git**, used if there is no environment
+        variable. A relative path is resolved against the ``etls`` folder.
     directory : str
-        Carpeta destino de los ficheros.
+        Destination folder of the files.
     refetch_days : int
-        Los ficheros de los últimos días se vuelven a bajar siempre: crecen durante el día.
+        The files of the last few days are always downloaded again: they grow during the day.
     timeout_s, retries, retry_wait_s : float, int, float
-        Tiempo máximo por petición, reintentos y espera.
+        Maximum time per request, retries and wait.
     """
 
     enabled: bool = True
@@ -460,26 +463,26 @@ class NrtConfig:
             raise InvalidConfigError("nrt: refetch_days >= 0, retries >= 1 y timeout_s > 0")
 
         if not self.sources:
-            raise InvalidConfigError("nrt.sources necesita al menos una carpeta")
+            raise InvalidConfigError("nrt.sources needs at least one folder")
 
 
 @dataclass(frozen=True)
 class LandCoverConfig:
     """
-    Enriquecimiento opcional de las detecciones con cobertura del suelo (SIGPAC).
+    Optional enrichment of detections with land cover (SIGPAC).
 
     Attributes
     ----------
     use_database : bool
-        Si es ``True``, consulta los recintos en ``fire.sigpac_recintos`` (usa ``database.url``)
-        y tiene prioridad sobre ``sigpac_dir``.
+        If ``True``, queries the parcels in ``fire.sigpac_recintos`` (uses ``database.url``)
+        and takes priority over ``sigpac_dir``.
     sigpac_dir : str | None
-        Carpeta con los recintos SIGPAC (shapefile / GeoPackage). Sin ``use_database``, ``None``
-        desactiva el paso.
+        Folder with the SIGPAC parcels (shapefile / GeoPackage). Without ``use_database``, ``None``
+        disables the step.
     sigpac_confidence : float
-        Confianza asignada a los puntos resueltos con SIGPAC.
+        Confidence assigned to the points resolved with SIGPAC.
     min_confidence : float
-        Umbral de confianza para ``is_agricultural`` / ``is_forest``.
+        Confidence threshold for ``is_agricultural`` / ``is_forest``.
     """
 
     use_database: bool = False
@@ -490,7 +493,7 @@ class LandCoverConfig:
 
 @dataclass(frozen=True)
 class PipelineConfig:
-    """Configuración completa del pipeline."""
+    """Complete pipeline configuration."""
 
     area_of_interest: AreaOfInterestConfig = field(default_factory=AreaOfInterestConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
@@ -508,12 +511,12 @@ class PipelineConfig:
 
     def algorithm_parameters(self) -> dict[str, Any]:
         """
-        Devuelve los parámetros que afectan al resultado, para registrarlos en cada evento.
+        Returns the parameters that affect the result, to record them in each event.
 
         Returns
         -------
         dict[str, Any]
-            Parámetros serializables a JSON.
+            JSON-serializable parameters.
         """
         return {
             "window_mode": str(self.windows.mode),
@@ -533,7 +536,7 @@ class PipelineConfig:
         }
 
     def to_dict(self) -> dict[str, Any]:
-        """Configuración serializable; la URL de la base de datos se oculta (lleva la clave)."""
+        """Serializable configuration; the database URL is hidden (it contains the password)."""
         data = asdict(self)
         data["database"]["url"] = "***" if self.database.url else None
 
@@ -545,7 +548,7 @@ def _build_section(section_cls: type, values: dict[str, Any] | None, name: str) 
     known = {item.name for item in fields(section_cls)}
     unknown = set(values) - known
     if unknown:
-        raise InvalidConfigError(f"{name}: claves desconocidas {sorted(unknown)}")
+        raise InvalidConfigError(f"{name}: unknown keys {sorted(unknown)}")
 
     normalized = {
         key: tuple(value) if isinstance(value, list) else value for key, value in values.items()
@@ -556,27 +559,27 @@ def _build_section(section_cls: type, values: dict[str, Any] | None, name: str) 
 
 def config_from_dict(raw: dict[str, Any]) -> PipelineConfig:
     """
-    Construye la configuración a partir de un diccionario (p. ej. YAML ya parseado).
+    Builds the configuration from a dictionary (e.g. an already parsed YAML).
 
     Parameters
     ----------
     raw : dict[str, Any]
-        Secciones de configuración; las ausentes toman su valor por defecto.
+        Configuration sections; missing ones take their default value.
 
     Returns
     -------
     PipelineConfig
-        Configuración validada.
+        Validated configuration.
 
     Raises
     ------
     InvalidConfigError
-        Si hay secciones o claves desconocidas o valores fuera de rango.
+        If there are unknown sections or keys or out-of-range values.
     """
     sections = {item.name: item.type for item in fields(PipelineConfig)}
     unknown = set(raw) - set(sections)
     if unknown:
-        raise InvalidConfigError(f"Secciones desconocidas: {sorted(unknown)}")
+        raise InvalidConfigError(f"Unknown sections: {sorted(unknown)}")
 
     defaults = PipelineConfig()
     built = {}
@@ -590,17 +593,17 @@ def config_from_dict(raw: dict[str, Any]) -> PipelineConfig:
 
 def load_config(path: str | Path | None = None) -> PipelineConfig:
     """
-    Carga la configuración desde un YAML; sin ruta devuelve los valores por defecto.
+    Loads the configuration from a YAML file; without a path it returns the default values.
 
     Parameters
     ----------
     path : str | Path | None
-        Ruta del YAML.
+        Path of the YAML file.
 
     Returns
     -------
     PipelineConfig
-        Configuración validada.
+        Validated configuration.
     """
     if path is None:
         return PipelineConfig()

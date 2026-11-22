@@ -1,4 +1,4 @@
-"""Tests de enlace entre ventanas, ids estables, fusión de eventos e idempotencia."""
+"""Tests of linking between windows, stable ids, event merging and idempotence."""
 
 from __future__ import annotations
 
@@ -10,17 +10,18 @@ import pytest
 
 from fire_etl import pipeline
 from fire_etl.config import PipelineConfig
-from fire_etl.outputs import read_previous_state, write_tables
-from fire_etl.pipeline import process_detections
-from tests.conftest import MODIS_SAMPLE, VIIRS_SAMPLE, ingest_rows, modis_row, viirs_row
+from fire_etl.load.geoparquet import read_previous_state, write_tables
+from fire_etl.transform.main import process_detections
+from tests.conftest import MODIS_SAMPLE, VIIRS_SAMPLE, modis_row, standardize_rows, viirs_row
 
 TWO_KM_EAST = 2000.0
 
 
 def run_rows(config: PipelineConfig, output_dir=None, modis=None, viirs=None):
-    """Procesa filas sintéticas reutilizando (y actualizando) el estado de ``output_dir``."""
+    """Processes synthetic rows reusing (and updating) the state in ``output_dir``."""
     previous = read_previous_state(output_dir) if output_dir is not None else None
-    tables = process_detections(ingest_rows(config, modis=modis, viirs=viirs), config, previous)
+    standardized = standardize_rows(config, modis=modis, viirs=viirs)
+    tables = process_detections(standardized, config, previous)
     if output_dir is not None:
         write_tables(tables, output_dir, config.geometry.storage_crs)
 
@@ -124,7 +125,7 @@ def test_two_events_merge_into_oldest_and_merge_is_recorded(config, tmp_path):
     first_events = first.events.sort_values("first_detection")
     oldest_id, newest_id = first_events["event_id"].tolist()
 
-    # Una detección MODIS del día siguiente (1 km x 1 km + buffer) toca ambos eventos.
+    # A MODIS detection of the next day (1 km x 1 km + buffer) touches both events.
     second = run_rows(config, tmp_path, modis=[modis_row("2026-09-15 10:30")])
     event = second.events.iloc[0]
 

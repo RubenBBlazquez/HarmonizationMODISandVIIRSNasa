@@ -1,4 +1,4 @@
-"""Tests de la carga de recintos SIGPAC (GeoPackage sintético y conexión simulada)."""
+"""Tests of the SIGPAC parcel load (synthetic GeoPackage and simulated connection)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from fire_etl import sigpac_loader
-from fire_etl.sigpac_loader import (
+from fire_etl.load import sigpac as sigpac_loader
+from fire_etl.load.sigpac import (
     SigpacLoadError,
     extract_gpkg,
     find_zips,
@@ -21,10 +21,10 @@ from fire_etl.sigpac_loader import (
 )
 
 
-def make_gpkg(path: Path, provincias: tuple[int, ...] = (20, 20, 20)) -> Path:
+def make_gpkg(path: Path, provinces: tuple[int, ...] = (20, 20, 20)) -> Path:
     frame = gpd.GeoDataFrame(
         {
-            "provincia": list(provincias),
+            "provincia": list(provinces),
             "municipio": [1, 1, 2],
             "agregado": [0, 0, 0],
             "zona": [0, 0, 0],
@@ -123,7 +123,7 @@ def test_extract_gpkg_requires_exactly_one_gpkg(tmp_path):
 
 def test_extract_gpkg_rejects_non_zip(tmp_path):
     bad = tmp_path / "bad.zip"
-    bad.write_text("no soy un zip")
+    bad.write_text("I am not a zip")
 
     with pytest.raises(SigpacLoadError):
         extract_gpkg(bad, tmp_path / "out")
@@ -157,7 +157,7 @@ def test_prepare_rows_normalizes_uso_and_nulls(tmp_path):
     assert by_col[1]["land_cover"] == "trees"
     assert by_col[1]["region"] is None and by_col[1]["incidencias"] is None
     assert by_col[2]["uso_sigpac"] is None and by_col[2]["land_cover"] is None
-    assert by_col[0]["geom"].startswith("0103000020E6100000")  # polígono con SRID 4326
+    assert by_col[0]["geom"].startswith("0103000020E6100000")  # polygon with SRID 4326
 
 
 def test_load_zip_replaces_province_in_one_transaction(tmp_path):
@@ -174,7 +174,7 @@ def test_load_zip_replaces_province_in_one_transaction(tmp_path):
 
 def test_load_zip_skips_already_loaded_without_extracting(tmp_path):
     connection = FakeConnection(loaded=True)
-    result = load_zip(connection, tmp_path / "no_existe.zip")
+    result = load_zip(connection, tmp_path / "does_not_exist.zip")
 
     assert result.skipped and result.n_recintos == 0
     assert "begin" not in connection.log
@@ -190,7 +190,7 @@ def test_load_zip_rejects_mixed_provinces_and_rolls_back(tmp_path):
     connection = FakeConnection()
 
     with pytest.raises(SigpacLoadError):
-        load_zip(connection, make_zip(tmp_path, provincias=(20, 20, 21)))
+        load_zip(connection, make_zip(tmp_path, provinces=(20, 20, 21)))
 
     assert connection.log[-1] == "rollback"
 
@@ -228,7 +228,7 @@ def test_list_remote_zips_decodes_names_and_sizes(monkeypatch):
 
 
 def test_load_remote_skips_loaded_before_downloading(tmp_path, monkeypatch):
-    monkeypatch.setattr(sigpac_loader, "download_zip", lambda *a: pytest.fail("no debe descargar"))
+    monkeypatch.setattr(sigpac_loader, "download_zip", lambda *a: pytest.fail("must not download"))
     remote = sigpac_loader.RemoteZip("20_X_gpkg.zip", "https://x/20.zip", 1)
 
     assert sigpac_loader.load_remote(FakeConnection(loaded=True), remote, tmp_path).skipped

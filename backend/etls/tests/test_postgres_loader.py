@@ -1,4 +1,4 @@
-"""Tests de la carga en PostGIS con una conexión simulada (no necesitan base de datos)."""
+"""Tests of the PostGIS load with a simulated connection (they need no database)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ from dataclasses import replace
 import pytest
 
 from fire_etl.config import DatabaseConfig, PipelineConfig
-from fire_etl.pipeline import process_detections
-from fire_etl.postgres_loader import (
+from fire_etl.load.postgres import (
     TABLE_ORDER,
     apply_schema,
     build_load_plan,
@@ -22,7 +21,8 @@ from fire_etl.postgres_loader import (
     load_to_postgres,
     truncate_statement,
 )
-from tests.conftest import ingest_rows, viirs_row
+from fire_etl.transform.main import process_detections
+from tests.conftest import standardize_rows, viirs_row
 
 SECRET_URL = "postgresql://fires:topsecret@localhost:5432/fires"
 SRID = 4326
@@ -81,7 +81,7 @@ def tables(config):
         viirs_row("2026-09-15 00:10", north_m=200, frp=60.0),
     ]
 
-    return process_detections(ingest_rows(config, viirs=rows), config)
+    return process_detections(standardize_rows(config, viirs=rows), config)
 
 
 @pytest.fixture
@@ -111,7 +111,7 @@ def test_load_plan_converts_values_to_database_types(tables):
     assert isinstance(row["acq_datetime"], dt.datetime) and row["acq_datetime"].tzinfo
     assert row["is_valid"] is True and row["skip_reason"] is None
     assert isinstance(row["frp"], float) and isinstance(row["is_representative"], bool)
-    assert row["frp_class"] == 2  # int de Python, no numpy ni pd.NA
+    assert row["frp_class"] == 2  # Python int, not numpy or pd.NA
 
 
 def test_insert_statement_casts_geometries_and_json(tables):
@@ -141,19 +141,19 @@ def test_execute_plan_truncates_then_inserts_in_one_transaction(tables):
 
 
 def test_execute_plan_inserts_in_chunks_and_logs_progress(tables, monkeypatch, caplog):
-    monkeypatch.setattr("fire_etl.postgres_loader.INSERT_CHUNK_ROWS", 1)
+    monkeypatch.setattr("fire_etl.load.postgres.INSERT_CHUNK_ROWS", 1)
     connection = FakeConnection()
     plan = build_load_plan(tables, "EPSG:4326")
 
-    with caplog.at_level(logging.INFO, logger="fire_etl.postgres_loader"):
+    with caplog.at_level(logging.INFO, logger="fire_etl.load.postgres"):
         counts = execute_plan(connection, plan, SRID)
 
     inserted = [entry for entry in connection.log if entry[0] == "executemany"]
-    assert len(inserted) == sum(counts.values())  # un executemany por fila con trozos de 1
+    assert len(inserted) == sum(counts.values())  # one executemany per row with chunks of 1
     assert all(entry[2] == 1 for entry in inserted)
     messages = " ".join(record.getMessage() for record in caplog.records)
-    assert "Insertando 2 filas en fire.detections" in messages
-    assert "detections: 1 de 2 filas" in messages
+    assert "Inserting 2 rows into fire.detections" in messages
+    assert "detections: 1 of 2 rows" in messages
 
 
 def test_truncate_lists_every_table_so_foreign_keys_are_allowed():
@@ -189,7 +189,7 @@ def test_load_without_url_logs_error(tables, config, caplog):
 def test_load_without_driver_logs_error_and_does_not_raise(
     tables, enabled_config, monkeypatch, caplog
 ):
-    monkeypatch.setitem(sys.modules, "psycopg", None)  # simula que no está instalado
+    monkeypatch.setitem(sys.modules, "psycopg", None)  # simulates that it is not installed
 
     with caplog.at_level(logging.ERROR):
         assert load_to_postgres(tables, enabled_config) is False
@@ -199,15 +199,15 @@ def test_load_without_driver_logs_error_and_does_not_raise(
 
 def test_load_failure_is_logged_without_credentials(tables, enabled_config, monkeypatch, caplog):
     def refuse(*args, **kwargs):
-        raise RuntimeError("conexión rechazada")
+        raise RuntimeError("connection refused")
 
     monkeypatch.setitem(sys.modules, "psycopg", types.SimpleNamespace(connect=refuse))
 
     with caplog.at_level(logging.ERROR):
         assert load_to_postgres(tables, enabled_config) is False
 
-    assert "No se pudo cargar en PostGIS (localhost:5432/fires)" in caplog.text
-    assert "conexión rechazada" in caplog.text
+    assert "Could not load into PostGIS (localhost:5432/fires)" in caplog.text
+    assert "connection refused" in caplog.text
     assert "topsecret" not in caplog.text
 
 

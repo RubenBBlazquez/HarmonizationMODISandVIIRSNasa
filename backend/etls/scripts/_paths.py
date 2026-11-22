@@ -1,8 +1,9 @@
 """
-Rutas comunes de los scripts. Al importarlo, añade ``backend/etls`` a ``sys.path``.
+Common paths of the scripts. When imported, it adds ``backend/etls`` to ``sys.path``.
 
-Así ``from fire_etl... import ...`` funciona al ejecutar ``python scripts/<script>.py`` sin
-instalar el paquete (basta con tener las dependencias). Debe importarse antes que ``fire_etl``.
+This way ``from fire_etl... import ...`` works when running ``python scripts/<script>.py``
+without installing the package (having the dependencies is enough). It must be imported before
+``fire_etl``.
 """
 
 import sys

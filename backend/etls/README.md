@@ -16,17 +16,37 @@ backend/etls/
 ├── scripts/                   # run_pipeline.py, validate_real_fire.py (+ _paths.py)
 ├── fire_etl/
 │   ├── config.py       # dataclasses + carga YAML
-│   ├── ingest.py       # CSV FIRMS -> esquema común, validación, detection_id
-│   ├── confidence.py   # normalización y matriz de confianza fusionada (función pura)
-│   ├── geometry.py     # puntos, AOI, CRS métrico, footprints
-│   ├── graph.py        # sjoin + componentes conexas (scipy)
-│   ├── fusion.py       # ventanas temporales -> observaciones
-│   ├── events.py       # enlace entre ventanas -> fire_events, ids estables, fusiones
-│   ├── sigpac_land_cover.py  # cobertura del suelo con SIGPAC
-│   ├── frp_classification.py # umbrales de FRP: ruido y clase baja/media/alta
-│   ├── clean_data.py   # datos finales (GeoJSON + JSON) para el mapa y el chatbot
-│   ├── outputs.py      # GeoParquet (EPSG:4326) y lectura del estado previo
-│   └── pipeline.py     # orquestación + CLI
+│   ├── pipeline.py     # orquestación extract -> transform -> load + CLI
+│   ├── stage_log.py    # log de inicio/fin (con tiempo) de cada etapa
+│   ├── extract/
+│   │   ├── main.py               # extract(): CSV FIRMS + estado previo
+│   │   └── firms/
+│   │       ├── archive.py        # descarga del archivo anual por país (MODIS y VIIRS)
+│   │       ├── nrt.py            # descarga de los ficheros NRT del año en curso
+│   │       └── reader.py         # lectura del CSV y detección del sensor
+│   ├── transform/
+│   │   ├── main.py               # transform(): ingesta -> eventos -> datos finales
+│   │   ├── tables.py             # PipelineTables (resultado que consume load)
+│   │   ├── clean_data.py         # construcción de los datos finales para el mapa y el chatbot
+│   │   ├── sigpac_land_cover.py  # cobertura del suelo con SIGPAC
+│   │   ├── firms/
+│   │   │   ├── normalization.py  # CSV crudo -> esquema común, detection_id
+│   │   │   ├── validation.py     # motivos de invalidez, filtros de fuente, descartes
+│   │   │   └── standardization.py # tablas crudas -> detecciones estándar (dedup, FRP)
+│   │   └── processing/           # algoritmo de fusión
+│   │       ├── confidence.py         # normalización y matriz de confianza fusionada
+│   │       ├── frp_classification.py # umbrales de FRP: ruido y clase baja/media/alta
+│   │       ├── geometry.py           # puntos, AOI, CRS métrico, footprints
+│   │       ├── graph.py              # sjoin + componentes conexas (scipy)
+│   │       ├── fusion.py             # ventanas temporales -> observaciones
+│   │       ├── events.py             # enlace entre ventanas -> fire_events, ids, fusiones
+│   │       └── energy.py             # energía radiada y biomasa quemada por evento
+│   └── load/
+│       ├── main.py               # load(): GeoParquet + clean_data + PostGIS
+│       ├── geoparquet.py         # GeoParquet (EPSG:4326) y lectura del estado previo
+│       ├── clean_data.py         # escritura de los datos finales (GeoJSON + JSON)
+│       ├── postgres.py           # carga de las tablas en PostGIS
+│       └── sigpac.py             # carga de recintos SIGPAC en PostGIS (proceso aparte)
 └── tests/
 ```
 
@@ -66,7 +86,7 @@ pre-commit run --all-files     # desde cualquier carpeta del repo; solo revisa b
 
 ## Diseño
 
-1. **Ingesta** (`ingest.py`). El sensor se detecta por las columnas (`brightness` → MODIS,
+1. **Estandarización** (`transform/firms/`). El sensor se detecta por las columnas (`brightness` → MODIS,
    `bright_ti4` → VIIRS), no por la extensión: FIRMS publica los NRT como `.txt`. Esquema común:
    `detection_id, source, satellite, acq_datetime (UTC tz-aware), acq_date, lat, lon,
    area_width_km, area_height_km, frp, daynight, confidence_raw, confidence_norm, brightness, brightness_2, version`.
@@ -320,7 +340,7 @@ exacta. Con datos reales, la Sierra de la Culebra (2022) sale en ≈ 100.000 t. 
 
 El FEGA publica un `.zip` por provincia (con un `.gpkg`, capa `recinto`) en
 <https://sigpac-hubcloud.es/html/sdsigpac/descargas/exploradorArchivos.html?path=2026%2Frecintos%2F>.
-`scripts/load_sigpac.py` lista los 50 zips de esa URL (`SIGPAC_BASE_URL`, en `sigpac_loader.py`) y los
+`scripts/load_sigpac.py` lista los 50 zips de esa URL (`SIGPAC_BASE_URL`, en `load/sigpac.py`) y los
 procesa **de uno en uno**: descarga, descomprime, lee con geopandas por bloques, reproyecta a
 EPSG:4326, carga en `fire.sigpac_recintos` y borra zip y `.gpkg`. No necesita parámetros:
 
