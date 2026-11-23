@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import date
+from collections.abc import Iterator
 from typing import Annotated, Any, Literal
 
-import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
 from backend.api import queries
 from backend.api.cache import TTLCache
 from backend.api.db import get_connection
+
+LOGGER = logging.getLogger(__name__)
 
 GEOJSON_MEDIA_TYPE = "application/geo+json"
 YEARLY_CACHE_TTL_S = 3600  # los datos solo cambian cuando corre el ETL
@@ -29,7 +32,57 @@ _countries_cache = TTLCache(COUNTRIES_CACHE_TTL_S, max_entries=1)
 
 router = APIRouter(prefix="/api", tags=["fires"])
 
-Connection = Annotated[psycopg.Connection, Depends(get_connection)]
+# --- Compatibilidad con bases sin migrar --------------------------------------------------------
+# La columna fire_events.land_cover la añade la migración de 01_schema.sql. Si la base aún no la
+# tiene (p. ej. Railway antes de migrar), las consultas la piden como NULL en vez de fallar: el mapa
+# funciona y el tipo de zona sale vacío. Se vuelve a comprobar cada pocos minutos, así que tras
+# migrar se empieza a usar sin reiniciar la API.
+SCHEMA_CHECK_TTL_S = 300
+_schema_cache = TTLCache(SCHEMA_CHECK_TTL_S, max_entries=4)
+LAND_COVER_COLUMN_SQL = (
+    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'fire' "
+    "AND table_name = 'fire_events' AND column_name = 'land_cover'"
+)
+MISSING_LAND_COVER_SQL = "NULL::text AS land_cover"
+
+
+def has_event_land_cover(connection: Any) -> bool:
+    """``True`` si la base tiene ``fire.fire_events.land_cover`` (se cachea unos minutos)."""
+
+    def check() -> bool:
+        present = connection.execute(LAND_COVER_COLUMN_SQL).fetchone() is not None
+        if not present:
+            LOGGER.warning(
+                "fire.fire_events.land_cover is missing: apply the migration in 01_schema.sql. "
+                "Serving events without land type meanwhile."
+            )
+        return present
+
+    return bool(_schema_cache.get_or_compute("event_land_cover", check))
+
+
+class SchemaCompatConnection:
+    """Conexión que adapta las consultas a una base sin la columna ``land_cover`` en eventos."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def execute(self, query: str, params: Any = None) -> Any:
+        if queries.EVENT_LAND_COVER_SQL in query and not has_event_land_cover(self._connection):
+            query = query.replace(queries.EVENT_LAND_COVER_SQL, MISSING_LAND_COVER_SQL)
+        return self._connection.execute(query, params)
+
+
+def get_api_connection() -> Iterator[SchemaCompatConnection]:
+    """Dependencia de FastAPI: conexión por petición, tolerante a bases sin migrar."""
+    connections = get_connection()
+    try:
+        yield SchemaCompatConnection(next(connections))
+    finally:
+        connections.close()  # cierra la conexión real al acabar la petición
+
+
+Connection = Annotated[SchemaCompatConnection, Depends(get_api_connection)]
 
 
 def get_filters(
@@ -142,6 +195,22 @@ def detections(
     return _geojson(
         queries.fetch_collection(connection, query, queries.detection_feature), BROWSER_CACHE_S
     )
+
+
+def warm_caches() -> None:
+    """
+    Precalcula las respuestas cacheadas que necesita la primera pantalla (países y resumen), para
+    que el primer visitante tras arrancar la API no espere a calcularlas. Si falla (por ejemplo,
+    la base aún no está lista) no pasa nada: se calcularán en la primera petición.
+    """
+    try:
+        for connection in get_connection():
+            _countries_cache.get_or_compute(
+                "countries", lambda: queries.fetch_countries(connection)
+            )
+            _summary_cache.get_or_compute("summary", lambda: queries.fetch_summary(connection))
+    except Exception as error:  # arranque: nunca debe impedir que la API sirva
+        LOGGER.warning("Could not warm the API caches: %s", error)
 
 
 @router.get("/countries")
