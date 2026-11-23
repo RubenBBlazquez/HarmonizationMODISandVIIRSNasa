@@ -1,47 +1,24 @@
-// Panel flotante de "Actividad reciente" sobre el mapa: lista los últimos incendios (/api/activity)
-// y se puede ocultar; oculto, solo queda una línea en el borde para volver a mostrarlo. No depende
-// de la librería del mapa: recibe cómo enfocar un punto y cómo avisar de que cambia su tamaño.
-
-import { escapeHtml, fetchJson, formatDay, formatNumber, sensorsLabel } from "./shared.js";
+// Panel flotante de "Recent activity" (derecha): los últimos incendios registrados (/activity). Se
+// puede ocultar; oculto, solo queda una pestaña en el borde para volver a mostrarlo. No depende de
+// la librería del mapa: recibe cómo enfocar un punto.
+import { getActivity } from "../../api/endpoints.js";
+import type { ActivityItem } from "../../api/types.js";
+import { sensorsLabel } from "../../domain/detections.js";
+import { formatDay } from "../../lib/dates.js";
+import { isolateFromMap } from "../../lib/dom.js";
+import { formatNumber } from "../../lib/format.js";
+import { escapeHtml } from "../../lib/html.js";
+import { isMobile } from "../../lib/responsive.js";
+import { readStorage, writeStorage } from "../../lib/storage.js";
 
 const ACTIVITY_LIMIT = 15;
-const MOBILE_MAX_WIDTH = 650;
 const STORAGE_KEY = "activity-panel-collapsed";
 const FOCUS_ZOOM = 12;
 
-interface ActivityItem {
-  event_id: string;
-  status: string;
-  sensors: string;
-  n_detections: number;
-  frp_max_mw: number | null;
-  first_detection: string | null;
-  last_detection: string | null;
-  lat: number;
-  lon: number;
-}
-
-interface ActivityResponse {
-  count: number;
-  items: ActivityItem[];
-}
-
 function readCollapsed(): boolean {
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored !== null) return stored === "1";
-  } catch {
-    // Sin almacenamiento: se usa el valor por defecto.
-  }
-  return window.innerWidth <= MOBILE_MAX_WIDTH; // en móvil empieza cerrado (ocupa media pantalla)
-}
-
-function saveCollapsed(collapsed: boolean): void {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0");
-  } catch {
-    // Sin almacenamiento: el panel vuelve a abrirse al recargar.
-  }
+  const stored = readStorage(STORAGE_KEY);
+  if (stored !== null) return stored === "1";
+  return isMobile(); // en móvil empieza cerrado (ocupa media pantalla)
 }
 
 function itemHtml(item: ActivityItem, index: number): string {
@@ -72,26 +49,17 @@ export function initActivityPanel(
     panel!.classList.toggle("collapsed", collapsed);
     document.body.classList.toggle("activity-open", !collapsed);
     showButton!.hidden = !collapsed;
-    saveCollapsed(collapsed);
+    writeStorage(STORAGE_KEY, collapsed ? "1" : "0");
     window.setTimeout(onResize, 300);
   }
   hideButton.addEventListener("click", () => setCollapsed(true));
   showButton.addEventListener("click", () => setCollapsed(false));
   setCollapsed(readCollapsed());
-
-  // Evita que los clics y la rueda sobre el panel lleguen al mapa.
-  for (const element of [panel, showButton]) {
-    element.addEventListener("click", (event) => event.stopPropagation());
-    element.addEventListener("wheel", (event) => event.stopPropagation());
-    element.addEventListener("mousedown", (event) => event.stopPropagation());
-    element.addEventListener("dblclick", (event) => event.stopPropagation());
-  }
+  isolateFromMap(panel, showButton);
 
   async function load(): Promise<void> {
     try {
-      const data = await fetchJson<ActivityResponse>("/activity", {
-        limit: String(ACTIVITY_LIMIT),
-      });
+      const data = await getActivity(ACTIVITY_LIMIT);
       if (data.items.length === 0) {
         list!.innerHTML = `<li class="activity-empty">No fires recorded yet.</li>`;
         return;

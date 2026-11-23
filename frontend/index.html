@@ -66,6 +66,8 @@
       .splash, .splash-globe, .splash-fire, .splash-bar span { animation-duration: 6s; }
     }
   </style>
+  <link rel="preconnect" href="https://gibs.earthdata.nasa.gov" crossorigin>
+  <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
@@ -82,7 +84,7 @@
   <aside class="globe-panel filters-control busy" aria-label="Map filters" aria-busy="true">
     <div class="globe-busy" aria-hidden="true"><span></span></div>
     <header class="globe-head">
-      <div class="globe-brand"><span class="globe-mark" aria-hidden="true">◍</span>
+      <div class="globe-brand"><span class="globe-mark" aria-hidden="true"><span class="globe-mark-fire"></span></span>
         <div><b>Siachi</b><small>Fires by country</small></div></div>
       <button type="button" class="panel-close" id="panel-close" aria-label="Hide filters" title="Hide filters">✕</button>
     </header>
@@ -165,6 +167,6 @@
     <span class="activity-reopen-label">Recent activity</span>
   </button>
 
-  <script type="module" src="/src/globe.ts"></script>
+  <script type="module" src="/src/pages/globe.ts"></script>
 </body>
 </html>

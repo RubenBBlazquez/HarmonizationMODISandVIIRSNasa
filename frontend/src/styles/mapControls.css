@@ -1,5 +1,5 @@
 /* Controles del mapa (filtros, leyenda, alertas, actividad, selección), portados del mapa
-   Leaflet. Los importa globe.ts. */
+   Leaflet. Los importa pages/globe.ts. */
 .activity-panel { position: fixed; z-index: 1000; top: 12px; right: 12px; bottom: 12px; width: 340px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; background: rgba(255,255,255,.96); border: 1px solid #dfe7dc; border-radius: 12px; box-shadow: 0 6px 24px #263c2933; transition: transform .25s ease, opacity .25s ease; }
 .activity-panel.collapsed { transform: translateX(calc(100% + 24px)); opacity: 0; pointer-events: none; }
 .activity-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 14px 14px 10px; border-bottom: 1px solid #edf0eb; }
@@ -148,7 +148,9 @@ body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-righ
 /* Marcador de incendio activo (MapLibre usa el elemento tal cual: necesita su tamaño). */
 /* Sin `position`: MapLibre coloca el marcador con position:absolute + transform; cambiarlo lo
    saca de su coordenada (las alertas aparecían apiladas en el mar). */
-.active-zone-marker { width: 44px; height: 44px; cursor: pointer; }
+/* `will-change`: capa propia en la GPU, para que MapLibre lo mueva en cada fotograma sin repintarlo. */
+.active-zone-marker { width: 44px; height: 44px; cursor: pointer; will-change: transform; }
+.map-moving .active-zone-pulse { animation-play-state: paused; }
 /* Tooltip fijado con Shift. */
 .globe-tip.pinned .maplibregl-popup-content { box-shadow: 0 0 0 2px #2f5d43, 0 2px 8px #0004; }
 
@@ -230,7 +232,7 @@ body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-righ
 @media (prefers-reduced-motion: reduce) { .hold-ring { animation-duration: 1ms; opacity: 1; transform: none; } }
 
 /* --- Móvil: calendario de fechas como hoja inferior, con botones del tamaño del dedo --------------
-   Selectores con .globe-panel: dateRange.css se carga después y, con la misma especificidad, ganaría.
+   Selectores con .globe-panel: dateRangePicker.css se carga después y, con la misma especificidad, ganaría.
    Dentro del panel (que tiene scroll) un desplegable absoluto quedaría recortado. */
 @media (max-width: 650px) {
   /* Pantalla completa: cabecera (✕) arriba, calendarios con scroll y pie (atajos / Done) abajo. */
