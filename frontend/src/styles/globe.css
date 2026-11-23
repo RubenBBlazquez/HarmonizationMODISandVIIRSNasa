@@ -74,15 +74,44 @@ button { font: inherit; cursor: pointer; }
 .globe-brand { display: flex; align-items: center; gap: 10px; }
 .globe-brand b { display: block; font: 800 16px Manrope, sans-serif; letter-spacing: -0.4px; color: #17241f; }
 .globe-brand small { color: var(--muted); font-size: 11px; }
+/* Logo: el mismo globo de la pantalla de carga (index.html), en pequeño. Mientras el panel carga
+   (`.busy`) se anima igual que allí: flota y el fuego late. */
 .globe-mark {
+  position: relative;
+  flex: none;
   width: 30px;
   height: 30px;
-  border-radius: 9px;
-  display: grid;
-  place-items: center;
-  background: #c7ee82;
-  color: #203a29;
-  font-size: 17px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #5fa8ff 0, #1e4f93 45%, #0a1f3d 100%);
+  box-shadow: 0 0 10px #3b82f633, inset -4px -4px 8px #00000066;
+}
+.globe-mark::before,
+.globe-mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid #ffffff2e;
+}
+.globe-mark::before { transform: scaleX(0.45); }
+.globe-mark::after { transform: scaleY(0.45); }
+.globe-mark-fire {
+  position: absolute;
+  right: 3px;
+  top: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #e2603a;
+  box-shadow: 0 0 0 0 #e2603a99;
+}
+.globe-panel.busy .globe-mark { animation: globe-mark-float 3s ease-in-out infinite; }
+.globe-panel.busy .globe-mark-fire { animation: globe-mark-pulse 1.6s ease-out infinite; }
+@keyframes globe-mark-float { 50% { transform: translateY(-3px); } }
+@keyframes globe-mark-pulse { to { box-shadow: 0 0 0 7px #e2603a00; } }
+@media (prefers-reduced-motion: reduce) {
+  .globe-panel.busy .globe-mark,
+  .globe-panel.busy .globe-mark-fire { animation-duration: 6s; }
 }
 
 .globe-country { border-top: 1px solid #edf0eb; border-bottom: 1px solid #edf0eb; padding: 8px 0; }
