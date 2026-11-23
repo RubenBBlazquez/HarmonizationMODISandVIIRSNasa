@@ -40,7 +40,7 @@ export function resetPlayButton(label?: string): void {
 
 function showStopButton(): void {
   ui.playButton.classList.add("playing");
-  ui.playButton.innerHTML = `${ICONS.stop}<span>Detener</span>`;
+  ui.playButton.innerHTML = `${ICONS.stop}<span>Stop</span>`;
 }
 
 /** Corta el paso pendiente y olvida hasta dónde se estaba viendo (sin volver a pintar). */

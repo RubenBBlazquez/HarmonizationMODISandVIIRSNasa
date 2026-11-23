@@ -29,7 +29,7 @@ export function historyLoadingHtml(): string {
   return `<div class="history-loading"><span class="spinner"></span>Looking for fires from previous years…</div>`;
 }
 
-/** "40.12° N · 3.70° O · 12 × 9 km": centro y tamaño aproximado del recuadro. */
+/** "40.12° N · 3.70° W · 12 × 9 km": centro y tamaño aproximado del recuadro. */
 function zoneLabel(bbox: string): string {
   const [west, south, east, north] = bbox.split(",").map(Number);
   const lat = (south + north) / 2;
@@ -39,7 +39,7 @@ function zoneLabel(bbox: string): string {
   // Tamaño aproximado del recuadro en km (1° de latitud ≈ 111 km).
   const height = (north - south) * 111;
   const width = (east - west) * 111 * Math.cos((lat * Math.PI) / 180);
-  return `${fmt(lat, "N", "S")} · ${fmt(lon, "E", "O")} · ${width.toFixed(0)} × ${height.toFixed(0)} km`;
+  return `${fmt(lat, "N", "S")} · ${fmt(lon, "E", "W")} · ${width.toFixed(0)} × ${height.toFixed(0)} km`;
 }
 
 /** Pinta en `container` el histórico de una zona ya descargado (`data`). */

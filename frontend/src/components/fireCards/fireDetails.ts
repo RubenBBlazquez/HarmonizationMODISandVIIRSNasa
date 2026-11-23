@@ -17,7 +17,7 @@ export function pillHtml(p: FireProperties, period: string | null): string {
     return `<span class="year-pill" style="--c:${year ? yearColor(year) : "#5b6b62"}">${escapeHtml(period)}</span>`;
   }
   const active = p.status === "active";
-  return `<span class="status-pill ${active ? "active" : "closed"}">${active ? "Activo" : "Cerrado"}</span>`;
+  return `<span class="status-pill ${active ? "active" : "closed"}">${active ? "Active" : "Closed"}</span>`;
 }
 
 /** Pastilla de color con la severidad. */
@@ -28,7 +28,7 @@ export function severityPillHtml(p: FireProperties): string {
 /** Todos los datos de un incendio (ventana ampliada). */
 export function statsHtml(p: FireProperties): string {
   return `<dl class="stats">
-    <div><dt>Detecciones</dt><dd>${detectionsLabel(p.n_detections)}</dd></div>
+    <div><dt>Detections</dt><dd>${detectionsLabel(p.n_detections)}</dd></div>
     ${
       p.zone_detections == null
         ? ""
