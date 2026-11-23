@@ -40,23 +40,28 @@ export function withHelpers(properties: Properties, dateField: string, order: nu
   };
 }
 
-/** Puntos ordenados para pintarlos y sus píxeles (polígonos ancho × alto). */
-export function detectionLayers(collection: FireCollection | null): {
-  points: GeoJSON.FeatureCollection;
-  pixels: GeoJSON.FeatureCollection;
-} {
-  if (!collection) return { points: EMPTY, pixels: EMPTY };
+/** Detecciones como puntos, ordenadas para pintarlas y con las propiedades auxiliares. */
+export function detectionPoints(collection: FireCollection | null): GeoJSON.FeatureCollection {
+  if (!collection) return EMPTY;
   const points: GeoJSON.Feature[] = [];
-  const pixels: GeoJSON.Feature[] = [];
   sortByConfidence(collection).features.forEach((feature, order) => {
     if (feature.geometry.type !== "Point") return;
-    const [lng, lat] = feature.geometry.coordinates;
     const properties = withHelpers(feature.properties, "acq_datetime", order);
     points.push({ type: "Feature", geometry: feature.geometry, properties });
-    const [halfWidth, halfHeight] = pixelHalfSizeDegrees(lat, feature.properties);
+  });
+  return { type: "FeatureCollection", features: points };
+}
+
+/** El píxel (polígono ancho × alto) de cada punto de `detectionPoints`, con sus propiedades. */
+export function detectionPixels(points: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection {
+  const pixels: GeoJSON.Feature[] = [];
+  for (const point of points.features) {
+    if (point.geometry.type !== "Point") continue;
+    const [lng, lat] = point.geometry.coordinates;
+    const [halfWidth, halfHeight] = pixelHalfSizeDegrees(lat, point.properties as Properties);
     pixels.push({
       type: "Feature",
-      properties,
+      properties: point.properties,
       geometry: boxPolygon({
         west: lng - halfWidth,
         east: lng + halfWidth,
@@ -64,11 +69,8 @@ export function detectionLayers(collection: FireCollection | null): {
         north: lat + halfHeight,
       }),
     });
-  });
-  return {
-    points: { type: "FeatureCollection", features: points },
-    pixels: { type: "FeatureCollection", features: pixels },
-  };
+  }
+  return { type: "FeatureCollection", features: pixels };
 }
 
 export function eventsLayer(collection: FireCollection | null): GeoJSON.FeatureCollection {

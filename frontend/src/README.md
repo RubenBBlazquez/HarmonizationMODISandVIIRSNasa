@@ -31,7 +31,8 @@ config.ts     Constantes compartidas (zooms, vista inicial).
 dom.ts        `ui`: todos los elementos fijos de index.html en un solo sitio.
 state.ts      `state`: estado compartido (país, datos cargados, claves ocultas, reproducción,
               incendio enfocado, modo selección) y consultas derivadas.
-render.ts     `pushData` (datos → mapa) y `applyFilters` (lo visible → filtros + marcadores).
+render.ts     `pushData` (datos → mapa; los píxeles, diferidos hasta que hacen falta) y
+              `applyFilters` (lo visible → filtros + marcadores).
 map/          El mapa MapLibre: instancia y zoom mínimo (map.ts), estilo base, fuentes y capas
               (layers.ts), filtros, conversión a GeoJSON (geojson.ts) y tooltip.
 ui/           Indicador de carga (busy), línea de estado (status), disposición de paneles

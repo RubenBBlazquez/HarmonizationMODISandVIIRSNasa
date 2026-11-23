@@ -30,6 +30,7 @@ import { initSelection } from "../globe/features/zoneSelection/selection.js";
 import { ui } from "../globe/dom.js";
 import { addLayers, setData } from "../globe/map/layers.js";
 import { map, mapLoaded, updateMinZoom } from "../globe/map/map.js";
+import { initPixelsOnDemand } from "../globe/render.js";
 import { state } from "../globe/state.js";
 import { hideSplash, initBusy, SPLASH_MAX_WAIT_MS, setBusy } from "../globe/ui/busy.js";
 import { initLayout } from "../globe/ui/layout.js";
@@ -75,6 +76,7 @@ async function start(): Promise<void> {
   addLayers();
   setData("countries", borders);
   watchPixelZoom();
+  initPixelsOnDemand();
 
   // Un enlace con #PRT abre directamente ese país; sin él, el país por defecto. Sin animación:
   // la página se abre ya encuadrada.

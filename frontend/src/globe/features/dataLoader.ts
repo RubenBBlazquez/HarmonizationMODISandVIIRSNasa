@@ -4,6 +4,7 @@
 import { getFireLayer, type FireLayer } from "../../api/endpoints.js";
 import type { FireCollection } from "../../api/types.js";
 import { ui } from "../dom.js";
+import { map } from "../map/map.js";
 import { pushData } from "../render.js";
 import { state } from "../state.js";
 import { clearBusyWhenDrawn, isLatestLoad, setBusy } from "../ui/busy.js";
@@ -61,6 +62,10 @@ async function refresh(): Promise<void> {
       if (isLatestLoad(token)) setBusy(false);
       return;
     }
+    // Si el mapa aún vuela hacia el país, se espera a que llegue: preparar y enviar decenas de
+    // miles de detecciones a la vez que la animación la dejaba a tirones.
+    if (map.isMoving()) await new Promise((resolve) => map.once("moveend", resolve));
+    if (signal.aborted) return;
     setStatus("Drawing the fires on the map…");
     // Deja pintar el aviso antes de preparar las capas (con decenas de miles tarda un poco).
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
