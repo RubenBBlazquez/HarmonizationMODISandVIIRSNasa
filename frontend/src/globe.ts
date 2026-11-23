@@ -45,7 +45,18 @@ import {
   PIXEL_FILL_OPACITY,
   detectionPopup,
   detectionTooltip,
+  LAND_COVER_KEYS,
+  SEVERITY_HELP,
+  SEVERITY_ORDER,
+  freshnessClass,
+  formatDate,
+  timeAgoLabel,
+  landCoverKeys,
+  confidenceLabel,
+  detectionsLabel,
   escapeHtml,
+  landCoverLabel,
+  severityLabel,
   eventPopup,
   fetchJson,
   firesPageUrl,
@@ -92,17 +103,22 @@ const PLAY_STEP_MS = 1000;
 
 // Leyenda interactiva: cada elemento se puede ocultar/mostrar pulsándolo.
 const LEGEND_ITEMS = [
-  { key: "frp:low", label: "Detección FRP baja", color: FRP_COLORS.low },
-  { key: "frp:medium", label: "Detección FRP media", color: FRP_COLORS.medium },
-  { key: "frp:high", label: "Detección FRP alta", color: FRP_COLORS.high },
-  { key: "status:active", label: "Evento activo", color: EVENT_COLORS.active },
-  { key: "status:closed", label: "Evento cerrado", color: EVENT_COLORS.closed },
+  { key: "frp:low", label: "Low FRP detection", color: FRP_COLORS.low },
+  { key: "frp:medium", label: "Medium FRP detection", color: FRP_COLORS.medium },
+  { key: "frp:high", label: "High FRP detection", color: FRP_COLORS.high },
+  { key: "status:active", label: "Active event", color: EVENT_COLORS.active },
+  { key: "status:closed", label: "Closed event", color: EVENT_COLORS.closed },
 ];
 
 const SELECT_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/>
   <path d="M12 8v8M8 12h8"/></svg>`;
+// Móvil: en lugar de la tecla Ctrl, un icono de dedo pulsando (mantener pulsado el mapa).
+const HOLD_BADGE = `<span class="hold-badge" title="Or press and hold the map, then drag" aria-label="Press and hold the map">
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11"/>
+    <path d="M12 10.5a1.5 1.5 0 0 1 3 0V12a1.5 1.5 0 0 1 3 0v3.5a5.5 5.5 0 0 1-5.5 5.5h-1A5.5 5.5 0 0 1 7 16.5L5.6 13.4a1.4 1.4 0 0 1 2.3-1.5L9 13"/></svg></span>`;
 const PLAY_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"
   aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg>`;
 const STOP_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"
@@ -156,14 +172,14 @@ const BASE_STYLE: StyleSpecification = {
       tiles: [GIBS_BLUE_MARBLE],
       tileSize: 256,
       maxzoom: 8,
-      attribution: "Imágenes: NASA Blue Marble (GIBS)",
+      attribution: "Imagery: NASA Blue Marble (GIBS)",
     },
     osm: {
       type: "raster",
       tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
       tileSize: 256,
       maxzoom: 19,
-      attribution: "&copy; OpenStreetMap contributors · Fronteras: Natural Earth",
+      attribution: "&copy; OpenStreetMap contributors · Borders: Natural Earth",
     },
   },
   // Atmósfera: halo azul alrededor del globo, que se desvanece al acercarse.
@@ -287,7 +303,20 @@ const alertsList = $<HTMLElement>(".alerts-list");
 // apaga cuando el mapa termina de pintarlos (evento "idle"), no solo cuando llega la respuesta.
 // Cada carga tiene su número: si llega otra más nueva, la antigua no apaga el indicador.
 let busyToken = 0;
+// Pantalla de carga inicial (index.html): se retira cuando el mapa está pintado (ver `start`) o con
+// la primera carga terminada; como red de seguridad, a los 12 s para no dejarla puesta si algo falla.
+function hideSplash(): void {
+  if (document.body.classList.contains("app-ready")) return;
+  document.body.classList.add("app-ready");
+  const splash = document.querySelector<HTMLElement>("#splash");
+  splash?.classList.add("done");
+  window.setTimeout(() => splash?.remove(), 800);
+}
+const SPLASH_MAX_WAIT_MS = 3000;
+window.setTimeout(hideSplash, 12_000); // red de seguridad si el arranque falla
+
 function setBusy(busy: boolean, text?: string): number {
+  if (!busy) hideSplash();
   busyToken += 1;
   panel.classList.toggle("busy", busy);
   panel.setAttribute("aria-busy", String(busy));
@@ -373,6 +402,11 @@ const picker = new DateRangePicker($<HTMLElement>("#date-range"), (chosen) => {
   updateMonthsHint();
   scheduleRefresh();
 });
+// Móvil: al terminar de elegir fechas ("Done" o un atajo como "Last week") se oculta el panel.
+$<HTMLElement>("#date-range").addEventListener("click", (event) => {
+  const target = event.target as HTMLElement;
+  if (isMobile() && target.closest("[data-done], [data-preset]")) setPanelOpen(false);
+});
 const rangeStart = (): string => picker.value?.start ?? "";
 const rangeEnd = (): string => picker.value?.end ?? "";
 
@@ -381,8 +415,8 @@ function updateMonthsHint(): void {
   const end = picker.value?.end;
   allYearsHint.textContent =
     start && end
-      ? `Mismas fechas (${formatDayMonth(start)} → ${formatDayMonth(end)}) en cada año`
-      : "Mismas fechas del rango en cada año";
+      ? `Same dates (${formatDayMonth(start)} → ${formatDayMonth(end)}) in each year`
+      : "Same dates of the range in each year";
 }
 updateMonthsHint();
 
@@ -551,6 +585,7 @@ function withHelpers(properties: Properties, dateField: string, order: number): 
     ...properties,
     _order: order,
     _year: date.slice(0, 4),
+    _lcs: `|${landCoverKeys(properties.land_cover).join("|")}|`, // "|crops|trees|"
     _day: date.slice(0, 10) || "9999-12-31",
     _t: date || "9999-12-31T23:59:59Z", // hora exacta: avance pasada a pasada de un incendio
     _yc: year ? yearColor(year) : NO_CATEGORY_COLOR,
@@ -621,6 +656,15 @@ function visibilityFilter(extra: FilterSpecification[]): FilterSpecification {
   if (byYear() && hiddenYears.length) {
     conditions.push(["!", ["in", ["get", "_year"], ["literal", hiddenYears]]]);
   }
+  // Una parcela con varias clases se oculta solo cuando todas sus clases están ocultas.
+  const hiddenCovers = hiddenOf("lc:");
+  if (hiddenCovers.length && !focus) {
+    const visible = LAND_COVER_KEYS.filter((item) => !hiddenCovers.includes(item.key));
+    conditions.push([
+      "any",
+      ...visible.map((item) => ["in", `|${item.key}|`, ["get", "_lcs"]]),
+    ] as FilterSpecification);
+  }
   if (playDay && !focus) conditions.push(["<=", ["get", "_day"], playDay]);
   if (playTime && focus) conditions.push(["<=", ["get", "_t"], playTime]);
   return ["all", ...conditions] as FilterSpecification;
@@ -661,7 +705,7 @@ function eventPopupHtml(properties: Properties, point: GeoJSON.Position | null):
     properties.status === "active" && point
       ? `<br><a class="google-maps-report" target="_blank" rel="noopener noreferrer"
           href="https://www.google.com/maps/search/?api=1&query=${point[1]},${point[0]}">
-          Reportar en Google Maps</a>`
+          Report on Google Maps</a>`
       : "";
   return `${eventPopup(properties)}${report}`;
 }
@@ -671,7 +715,10 @@ function drawActiveMarkers(): void {
   activeMarkers = [];
   if (focus) return; // con un incendio enfocado no se muestran los del rango
   const active = (lastEvents?.features ?? []).filter(
-    (feature) => feature.properties.status === "active" && isVisibleByDate(feature, "first_detection"),
+    (feature) =>
+      feature.properties.status === "active" &&
+      isVisibleByDate(feature, "first_detection") &&
+      landCoverKeys(feature.properties.land_cover).some((key) => !hiddenKeys.has(`lc:${key}`)),
   );
   updateAlerts(active);
   if (hiddenKeys.has("status:active")) return;
@@ -682,7 +729,7 @@ function drawActiveMarkers(): void {
     const element = document.createElement("div");
     element.className = "active-zone-marker";
     element.innerHTML = `<span class="active-zone-pulse" style="--alert-color:${color}"></span>
-      <span class="active-zone-icon" style="--alert-color:${color}" aria-label="Zona activa">!</span>`;
+      <span class="active-zone-icon" style="--alert-color:${color}" aria-label="Active zone">!</span>`;
     const popup = new maplibregl.Popup({ maxWidth: "320px", offset: 20 }).setHTML(
       eventPopupHtml(feature.properties, point),
     );
@@ -699,39 +746,140 @@ alertsToggle.addEventListener("click", () => {
   alertsToggle.setAttribute("aria-expanded", String(open));
 });
 
-function updateAlerts(active: FireFeature[]): void {
+/** "37.12° N, 4.55° W" para una posición [lng, lat]. */
+function coordinatesLabel(position: GeoJSON.Position): string {
+  const [lng, lat] = position;
+  return `${Math.abs(lat).toFixed(2)}° ${lat >= 0 ? "N" : "S"}, ${Math.abs(lng).toFixed(2)}° ${lng >= 0 ? "E" : "W"}`;
+}
+
+type AlertSort = "recent" | "severity";
+let alertsSort: AlertSort = "recent"; // lo urgente es lo último que se ha visto
+let lastAlerts: FireFeature[] = [];
+
+/** "recent": última detección primero; "severity": la más grave primero. En ambos, el otro criterio desempata. */
+function sortAlerts(features: FireFeature[], mode: AlertSort): FireFeature[] {
+  const rank = (feature: FireFeature): number =>
+    SEVERITY_ORDER.indexOf(String(feature.properties.severity) as (typeof SEVERITY_ORDER)[number]);
+  const recency = (feature: FireFeature): string => String(feature.properties.last_detection ?? "");
+  const byRecency = (a: FireFeature, b: FireFeature): number => recency(b).localeCompare(recency(a));
+  const bySeverity = (a: FireFeature, b: FireFeature): number => rank(b) - rank(a);
+  return [...features].sort(mode === "recent" ? (a, b) => byRecency(a, b) || bySeverity(a, b) : (a, b) => bySeverity(a, b) || byRecency(a, b));
+}
+
+function alertItemHtml(feature: FireFeature, index: number): string {
+  const p = feature.properties;
+  const place = feature.geometry.type === "Point" ? coordinatesLabel(feature.geometry.coordinates) : "";
+  const severity = String(p.severity ?? "none");
+  return `<button type="button" class="alert-item" data-index="${index}">
+    <span class="severity-pill sev-${escapeHtml(severity)}" title="${escapeHtml(SEVERITY_HELP)}">${escapeHtml(severityLabel(p.severity))}</span>
+    <span class="alert-body"><b>${escapeHtml(landCoverLabel(p.land_cover))}</b>
+      <small>${detectionsLabel(p.n_detections)} · max FRP ${escapeHtml(p.frp_max_mw)} MW</small>
+      <small>${place} · started ${formatDay(p.first_detection)}</small></span>
+    <span class="alert-time ${freshnessClass(p.last_detection)}" title="Last seen ${escapeHtml(formatDate(p.last_detection))}">
+      <b>${escapeHtml(timeAgoLabel(p.last_detection))}</b><small>last seen</small></span>
+  </button>`;
+}
+
+function renderAlerts(): void {
+  const active = sortAlerts(lastAlerts, alertsSort);
   alertsToggle.querySelector<HTMLElement>(".alerts-count")!.textContent = String(active.length);
   alertsToggle.classList.toggle("has-alerts", active.length > 0);
+  const tab = (mode: AlertSort, label: string): string =>
+    `<button type="button" class="alerts-tab" data-sort="${mode}" aria-pressed="${alertsSort === mode}">${label}</button>`;
   alertsList.innerHTML = active.length
-    ? active
-        .map((feature, index) => {
-          const p = feature.properties;
-          return `<button type="button" class="alert-item" data-index="${index}">
-            <i style="--alert-color:${confidenceColor(p.confidence)}" aria-hidden="true"></i>
-            <span><b>${escapeHtml(p.event_id)}</b><small>Confianza: ${escapeHtml(p.confidence)}</small></span>
-          </button>`;
-        })
-        .join("")
-    : `<div class="alerts-empty">No hay zonas activas</div>`;
+    ? `<div class="alerts-tabs" role="group" aria-label="Sort alerts">${tab("recent", "Most recent")}${tab("severity", "Most severe")}</div>` +
+      active.map(alertItemHtml).join("")
+    : `<div class="alerts-empty">No active zones</div>`;
+  alertsList.querySelectorAll<HTMLButtonElement>(".alerts-tab").forEach((button) =>
+    button.addEventListener("click", () => {
+      alertsSort = button.dataset.sort as AlertSort;
+      renderAlerts();
+    }),
+  );
   alertsList.querySelectorAll<HTMLButtonElement>(".alert-item").forEach((button) => {
     button.addEventListener("click", () => {
       const geometry = active[Number(button.dataset.index)].geometry;
       if (geometry.type === "Point") {
         map.flyTo({ center: [geometry.coordinates[0], geometry.coordinates[1]], zoom: ALERT_ZOOM });
+        if (isMobile()) {
+          alertsList.hidden = true; // móvil: deja ver el mapa tras elegir
+          alertsToggle.setAttribute("aria-expanded", "false");
+        }
       }
     });
   });
 }
 
+function updateAlerts(features: FireFeature[]): void {
+  lastAlerts = features;
+  renderAlerts();
+}
+
 // --- Leyenda interactiva ------------------------------------------------------------------------
-legendElement.innerHTML = `${LEGEND_ITEMS.map(
+legendElement.innerHTML = `<details class="legend-all" open><summary>Legend</summary>
+  <button type="button" class="legend-close" data-legend-close aria-label="Hide legend">✕</button>${LEGEND_ITEMS.map(
   (item) => `<button type="button" class="legend-item" data-key="${item.key}"
-    aria-pressed="true" title="Pulsa para ocultar o mostrar">
+    aria-pressed="true" title="Click to hide or show">
     <i style="--c:${item.color}"></i>${item.label}</button>`,
 ).join("")}
-  <button type="button" class="legend-reset" data-reset hidden>Mostrar todo</button>
-  <div class="legend-note">Pulsa un elemento para ocultarlo o mostrarlo.<br>
-    Zoom ≥ ${PIXEL_MIN_ZOOM}: área de la detección (ancho × alto, km)</div>`;
+  <details class="legend-group" open>
+    <summary>Land type (parcel)</summary>
+    ${LAND_COVER_KEYS.map(
+      (item) => `<button type="button" class="legend-item" data-key="lc:${item.key}"
+        aria-pressed="true" title="Click to hide or show">
+        <i style="--c:${item.color}"></i>${item.label}</button>`,
+    ).join("")}
+  </details>
+  <button type="button" class="legend-reset" data-reset hidden>Show all</button>
+  <div class="legend-note">Click an item to hide or show it.<br>
+    Zoom ≥ ${PIXEL_MIN_ZOOM}: detection area (width × height, km)</div></details>`;
+// Móvil = ancho de 650 px o menos. Se consulta en cada acción (no solo al cargar) para que cambiar
+// el tamaño de la ventana o girar el dispositivo no deje activo el comportamiento equivocado.
+const mobileQuery = window.matchMedia("(max-width: 650px)");
+const isMobile = (): boolean => mobileQuery.matches;
+// Móvil: la leyenda se abre con su botón (icono de capas) y se cierra con la ✕; abrirla cierra la
+// lista de alertas y al revés, para que no se pisen. En escritorio está siempre visible.
+const legendFab = document.querySelector<HTMLButtonElement>("#legend-fab")!;
+function setLegendOpen(open: boolean): void {
+  legendElement.classList.toggle("legend-hidden", isMobile() && !open);
+  legendFab.setAttribute("aria-expanded", String(open));
+  if (open && isMobile()) {
+    alertsList.hidden = true;
+    alertsToggle.setAttribute("aria-expanded", "false");
+  }
+}
+legendFab.addEventListener("click", () => setLegendOpen(legendElement.classList.contains("legend-hidden")));
+legendElement.querySelector("[data-legend-close]")!.addEventListener("click", () => setLegendOpen(false));
+alertsToggle.addEventListener("click", () => {
+  if (isMobile() && !alertsList.hidden) setLegendOpen(false);
+});
+for (const type of ["mousedown", "click", "dblclick", "wheel"]) {
+  legendFab.addEventListener(type, (event) => event.stopPropagation());
+}
+const filtersFab = document.querySelector<HTMLButtonElement>("#filters-fab")!;
+/** Muestra u oculta el panel de filtros; el botón del embudo aparece cuando está oculto. */
+function setPanelOpen(open: boolean): void {
+  panel.classList.toggle("panel-hidden", !open);
+  filtersFab.hidden = open;
+}
+/** Disposición inicial de cada modo: escritorio con panel y leyenda a la vista; móvil, ocultos. */
+function applyLayoutMode(): void {
+  if (isMobile()) {
+    legendElement.querySelector<HTMLDetailsElement>(".legend-all")!.open = true; // se cierra entero
+    setLegendOpen(false);
+    setPanelOpen(false);
+  } else {
+    legendElement.classList.remove("legend-hidden");
+    setPanelOpen(true);
+  }
+}
+applyLayoutMode();
+mobileQuery.addEventListener("change", applyLayoutMode);
+filtersFab.addEventListener("click", () => setPanelOpen(true));
+document.querySelector<HTMLButtonElement>("#panel-close")!.addEventListener("click", () => setPanelOpen(false));
+for (const type of ["mousedown", "click", "dblclick", "wheel"]) {
+  filtersFab.addEventListener(type, (event) => event.stopPropagation());
+}
 
 function syncLegend(): void {
   legendElement.querySelectorAll<HTMLButtonElement>("button.legend-item").forEach((button) => {
@@ -766,9 +914,9 @@ function updateYearsLegend(): void {
     .map(
       (row) => `<button type="button" class="year-chip" data-year="${row.year}"
         aria-pressed="${!hiddenKeys.has(`year:${row.year}`)}"
-        title="${row.year}: ${formatNumber(row.events)} incendios (eventos) y ${formatNumber(row.detections)} detecciones de satélite en el país">
+        title="${row.year}: ${formatNumber(row.events)} fires (events) and ${formatNumber(row.detections)} satellite detections in the country">
         <i style="--c:${yearColor(row.year)}"></i><b>${row.year}</b>
-        <span>${formatNumber(row.events)} eventos · ${formatNumber(row.detections)} detecciones</span></button>`,
+        <span>${formatNumber(row.events)} events · ${formatNumber(row.detections)} detections</span></button>`,
     )
     .join("");
 }
@@ -817,12 +965,12 @@ function describe(label: string, collection: FireCollection | null): string | nu
   if (!collection) return null;
   const shown = formatNumber(collection.count);
   return collection.truncated
-    ? `${label}: ${shown} de ${formatNumber(collection.total)} (reduce el rango de fechas)`
+    ? `${label}: ${shown} of ${formatNumber(collection.total)} (narrow the date range)`
     : `${label}: ${shown}`;
 }
 
 const FOCUS_STATUS =
-  "Viendo un incendio concreto. Quítalo para volver a los incendios del rango de fechas.";
+  "Viewing a single fire. Remove it to go back to the fires of the date range.";
 
 function updateStatus(): void {
   if (focus) {
@@ -832,21 +980,21 @@ function updateStatus(): void {
   if (lastAllYears) {
     const key = `${rangeStart()}|${rangeEnd()}|${selectedCode}`;
     if (lastYearlyKey !== key) {
-      statusElement.textContent = "Cargando los contadores por año…";
+      statusElement.textContent = "Loading the per-year counts…";
       return;
     }
     const total = (field: "events" | "detections"): number =>
       lastYearly.reduce((sum, row) => sum + row[field], 0);
     statusElement.textContent =
-      `${lastYearly.length} años · ${formatNumber(total("events"))} eventos · ` +
-      `${formatNumber(total("detections"))} detecciones (detalle por año arriba)`;
+      `${lastYearly.length} years · ${formatNumber(total("events"))} events · ` +
+      `${formatNumber(total("detections"))} detections (per-year detail above)`;
     return;
   }
-  const parts = [describe("Eventos", lastEvents), describe("Detecciones", lastDetections)];
-  let text = parts.filter(Boolean).join(" · ") || "Sin capas activas";
-  if (hiddenKeys.size > 0) text += " · hay elementos ocultos (leyenda)";
+  const parts = [describe("Events", lastEvents), describe("Detections", lastDetections)];
+  let text = parts.filter(Boolean).join(" · ") || "No active layers";
+  if (hiddenKeys.size > 0) text += " · some items are hidden (legend)";
   if (lastDetections && map.getZoom() < PIXEL_MIN_ZOOM) {
-    text += ` · acerca el mapa (zoom ${PIXEL_MIN_ZOOM}) para ver el píxel`;
+    text += ` · zoom the map in (zoom ${PIXEL_MIN_ZOOM}) to see the pixel`;
   }
   statusElement.textContent = text;
 }
@@ -888,7 +1036,7 @@ async function refresh(): Promise<void> {
 
   const token = setBusy(
     true,
-    allYears ? "Cargando las mismas fechas de todos los años…" : "Cargando los incendios…",
+    allYears ? "Loading the same dates of every year…" : "Loading the fires…",
   );
   try {
     if (allYears) void loadYearly(params.start, params.end, selectedCode); // no bloquea el mapa
@@ -903,7 +1051,7 @@ async function refresh(): Promise<void> {
       if (token === busyToken) setBusy(false);
       return;
     }
-    statusElement.textContent = "Dibujando los incendios en el mapa…";
+    statusElement.textContent = "Drawing the fires on the map…";
     // Deja pintar el aviso antes de preparar las capas (con decenas de miles tarda un poco).
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
     if (signal.aborted) return;
@@ -913,7 +1061,7 @@ async function refresh(): Promise<void> {
   } catch (error) {
     // Cancelada por una carga más nueva: el indicador sigue hasta que acabe esa.
     if ((error as Error).name === "AbortError") return;
-    setBusy(false, "No se pudieron cargar los datos. ¿Está la API en marcha?");
+    setBusy(false, "Could not load the data. Is the API running?");
   }
 }
 
@@ -943,7 +1091,7 @@ let playTimer: number | undefined;
 // Hora (ISO) hasta la que se ve el incendio enfocado durante su avance.
 let playTime: string | null = null;
 const FOCUS_STEP_MS = 900;
-const PASS_TIME = new Intl.DateTimeFormat("es-ES", {
+const PASS_TIME = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
   month: "short",
   year: "numeric",
@@ -954,11 +1102,11 @@ const PASS_TIME = new Intl.DateTimeFormat("es-ES", {
 
 function resetPlayButton(label?: string): void {
   playButton.classList.remove("playing");
-  const text = label ?? (focus ? "Ver avance del incendio" : "Ver avance día a día");
+  const text = label ?? (focus ? "Watch the fire progress" : "Watch day-by-day progress");
   playButton.innerHTML = `${PLAY_ICON}<span>${text}</span>`;
   playButton.title = focus
-    ? "Muestra cómo creció el incendio, pasada a pasada del satélite"
-    : "Muestra día a día cómo avanzan los incendios del rango elegido";
+    ? "Shows how the fire grew, satellite pass by satellite pass"
+    : "Shows day by day how the fires in the chosen range progress";
 }
 resetPlayButton();
 
@@ -988,11 +1136,11 @@ function startFocusPlayback(timeline: Focus["timeline"]): void {
     applyFilters();
     const when = PASS_TIME.format(new Date(time)).replace(/\./g, "");
     statusElement.textContent =
-      `Avance del incendio: pasada ${index + 1} de ${timeline.length} · ${when} UTC · ` +
-      `${formatNumber(total)} ${total === 1 ? "detección" : "detecciones"}`;
+      `Fire progress: pass ${index + 1} of ${timeline.length} · ${when} UTC · ` +
+      `${formatNumber(total)} ${total === 1 ? "detection" : "detections"}`;
     if (index >= timeline.length - 1) {
       playTimer = undefined;
-      resetPlayButton("Repetir avance del incendio");
+      resetPlayButton("Replay the fire progress");
       return; // se queda mostrando el incendio completo; pulsar de nuevo vuelve a empezar
     }
     index += 1;
@@ -1007,7 +1155,7 @@ async function startPlayback(): Promise<void> {
     return;
   }
   if (!rangeStart() || !rangeEnd()) {
-    statusElement.textContent = "Elige un rango de fechas para ver el avance";
+    statusElement.textContent = "Choose a date range to see the progress";
     return;
   }
   const first = rangeStart();
@@ -1024,10 +1172,10 @@ async function startPlayback(): Promise<void> {
     const shown =
       countUpTo(lastEvents, "first_detection") + countUpTo(lastDetections, "acq_datetime");
     statusElement.textContent =
-      `Avance: ${formatDay(playDay)} (hasta ${formatDay(last)}) · ${formatNumber(shown)} elementos`;
+      `Progress: ${formatDay(playDay)} (until ${formatDay(last)}) · ${formatNumber(shown)} items`;
     if (playDay >= last) {
       playTimer = undefined;
-      resetPlayButton("Repetir avance");
+      resetPlayButton("Replay progress");
       return; // se queda mostrando el rango completo; pulsar de nuevo vuelve a empezar
     }
     playDay = addDays(playDay, 1);
@@ -1080,7 +1228,11 @@ function countryBounds(geometry: GeoJSON.Geometry): maplibregl.LngLatBounds | nu
 
 /** Margen del encuadre para que el país no quede debajo de los paneles. */
 function viewPadding(): maplibregl.PaddingOptions {
-  if (window.innerWidth <= 650) return { top: 40, right: 20, bottom: panel.offsetHeight + 24, left: 20 };
+  if (window.innerWidth <= 650) {
+    // Móvil: el panel de filtros es una hoja superior y la actividad, una inferior.
+    const activityOpen = document.body.classList.contains("activity-open");
+    return { top: 70, right: 20, bottom: activityOpen ? window.innerHeight * 0.45 + 20 : 40, left: 20 };
+  }
   const activityOpen = document.body.classList.contains("activity-open");
   return { top: 60, right: activityOpen ? 380 : 60, bottom: 40, left: panel.offsetWidth + 36 };
 }
@@ -1115,11 +1267,11 @@ function selectCountry(code: string, animate = true): void {
   const covered = COVERED_COUNTRIES.has(code);
   countryNote.classList.toggle("warning", !covered);
   countryNote.textContent = covered
-    ? "Incendios detectados por los satélites MODIS y VIIRS (NASA FIRMS)."
+    ? "Fires detected by the MODIS and VIIRS satellites (NASA FIRMS)."
     : has_data
-      ? "De momento solo se cargan los incendios de España: aquí solo aparecen detecciones " +
-        "sueltas cerca de la frontera."
-      : "De momento solo se cargan los incendios de España: este país no tiene datos.";
+      ? "For now only fires in Spain are loaded: only stray detections near the " +
+        "border appear here."
+      : "For now only fires in Spain are loaded: this country has no data.";
 
   stopPlayback();
   lastYearlyKey = "";
@@ -1170,8 +1322,8 @@ function featureAt(point: maplibregl.PointLike): {
 
 map.on("mousemove", (event) => {
   coordinatesElement.innerHTML =
-    `Latitud: <b>${event.lngLat.lat.toFixed(5)}°</b><br>` +
-    `Longitud: <b>${event.lngLat.lng.toFixed(5)}°</b>`;
+    `Latitude: <b>${event.lngLat.lat.toFixed(5)}°</b><br>` +
+    `Longitude: <b>${event.lngLat.lng.toFixed(5)}°</b>`;
   if (selecting) return;
   const hit = featureAt(event.point);
   const code = hit?.kind === "country" ? String(hit.feature.properties.code) : null;
@@ -1183,8 +1335,8 @@ map.on("mousemove", (event) => {
     hit?.kind === "detection"
       ? detectionTooltip(properties!)
       : otherCountry
-        ? `<b>${escapeHtml(properties!.name)}</b>${properties!.has_data ? " · con datos" : ""}` +
-          "<br>Pulsa para ver sus incendios"
+        ? `<b>${escapeHtml(properties!.name)}</b>${properties!.has_data ? " · has data" : ""}` +
+          "<br>Click to see its fires"
         : null;
   if (!html) {
     hideTip();
@@ -1285,10 +1437,10 @@ function clearSelection(): void {
 // "Años anteriores": misma zona y mismas fechas del año en los años anteriores, en una ventana
 // grande con el resumen por años y el mapa de cada incendio (un clic en un mapa lo amplía).
 async function showHistory(bounds: Bounds): Promise<void> {
-  const modal = openModal("Incendios de años anteriores", "history-modal", "Histórico de la zona");
+  const modal = openModal("Fires from previous years", "history-modal", "Zone history");
   if (!rangeStart() || !rangeEnd()) {
     modal.body.innerHTML =
-      '<p class="history-empty">Elige un rango de fechas para comparar con años anteriores.</p>';
+      '<p class="history-empty">Choose a date range to compare with previous years.</p>';
     return;
   }
   modal.body.innerHTML = historyLoadingHtml();
@@ -1314,14 +1466,14 @@ function openSelectionMenu(bounds: Bounds): void {
   const element = document.createElement("div");
   element.className = "selection-menu";
   element.innerHTML = `
-    <b>Zona seleccionada</b>
-    <small>Lat ${bounds.south.toFixed(3)} a ${bounds.north.toFixed(3)} ·
-      Lon ${bounds.west.toFixed(3)} a ${bounds.east.toFixed(3)}</small>
-    <button type="button" data-action="history">Incendios de los últimos ${HISTORY_YEARS} años</button>
+    <b>Selected zone</b>
+    <small>Lat ${bounds.south.toFixed(3)} to ${bounds.north.toFixed(3)} ·
+      Lon ${bounds.west.toFixed(3)} to ${bounds.east.toFixed(3)}</small>
+    <button type="button" data-action="history">Fires of the last ${HISTORY_YEARS} years</button>
     <button type="button" data-action="predict" disabled
-      title="Predicción con series temporales: ¿habrá fuego hoy o en X tiempo en esta zona?">
-      Predecir fuego en la zona (series temporales) <em>· Próximamente</em></button>
-    <button type="button" data-action="clear">Quitar selección</button>`;
+      title="Time-series forecast: will there be fire today or in X time in this zone?">
+      Predict fire in the zone (time series) <em>· Coming soon</em></button>
+    <button type="button" data-action="clear">Clear selection</button>`;
   element.querySelectorAll<HTMLButtonElement>("button[data-action]").forEach((button) =>
     button.addEventListener("click", () => {
       closeMenu();
@@ -1342,21 +1494,49 @@ function setSelecting(active: boolean): void {
   anchor = null;
   selectButton.classList.toggle("active", active);
   selectButton.innerHTML = `${SELECT_ICON}<span>${
-    active ? "Arrastra sobre el mapa… (Esc cancela)" : "Seleccionar zona"
-  }</span>${active ? "" : "<kbd>Ctrl</kbd>"}`;
+    active ? "Drag on the map… (Esc cancels)" : "Select zone"
+  }</span>${active ? "" : isMobile() ? HOLD_BADGE : "<kbd>Ctrl</kbd>"}`;
   map.getContainer().classList.toggle("selecting", active);
   if (active) {
     hideTip();
     map.dragPan.disable();
+    map.touchZoomRotate.disable(); // con el dedo, el arrastre dibuja el recuadro (no hace zoom)
   } else {
     map.dragPan.enable();
+    map.touchZoomRotate.enable();
   }
+  showSelectHint(active && isMobile());
+}
+
+/** Aviso flotante en móvil mientras se dibuja la zona (el panel de filtros está oculto). */
+let selectHint: HTMLElement | null = null;
+function showSelectHint(show: boolean): void {
+  if (!show) {
+    selectHint?.remove();
+    selectHint = null;
+    return;
+  }
+  if (selectHint) return;
+  selectHint = document.createElement("div");
+  selectHint.className = "select-hint";
+  selectHint.innerHTML = `<span>Drag on the map to select a zone</span>
+    <button type="button" data-cancel>Cancel</button>`;
+  selectHint.querySelector("[data-cancel]")!.addEventListener("click", () => {
+    clearSelection();
+    setSelecting(false);
+  });
+  document.body.append(selectHint);
 }
 
 setSelecting(false); // pinta el botón (icono + texto)
+// Al pasar de móvil a escritorio (o al revés) cambia el distintivo del botón (dedo / Ctrl).
+mobileQuery.addEventListener("change", () => {
+  if (!selecting) setSelecting(false);
+});
 selectButton.addEventListener("click", () => {
   if (selecting && anchor) clearSelection(); // arrastre a medias: se descarta
   setSelecting(!selecting);
+  if (selecting && isMobile()) setPanelOpen(false); // móvil: deja ver el mapa para dibujar la zona
 });
 
 // Con Ctrl pulsado el mapa selecciona zona sin pulsar el botón (al soltarlo, vuelve a arrastrar).
@@ -1381,8 +1561,8 @@ window.addEventListener("blur", () => {
   ctrlSelecting = false;
 });
 
-/** Posición en el mapa de un evento del ratón de `document` (también fuera del lienzo). */
-function lngLatOf(event: MouseEvent): maplibregl.LngLat {
+/** Posición en el mapa de un evento del ratón o del dedo de `document` (también fuera del lienzo). */
+function lngLatOf(event: { clientX: number; clientY: number }): maplibregl.LngLat {
   const rect = map.getCanvasContainer().getBoundingClientRect();
   return map.unproject([event.clientX - rect.left, event.clientY - rect.top]);
 }
@@ -1410,11 +1590,12 @@ map.getContainer().addEventListener(
   },
   true,
 );
-document.addEventListener("mouseup", (event) => {
+/** Termina el arrastre en `end`: abre el menú de la zona o descarta un toque sin arrastre. */
+function finishSelection(end: maplibregl.LngLat): void {
   if (!selecting || !anchor) return;
   swallowClick = true;
   window.setTimeout(() => (swallowClick = false), 100);
-  const bounds = boundsOf(anchor, lngLatOf(event));
+  const bounds = boundsOf(anchor, end);
   setSelecting(false);
   if (bounds.west === bounds.east || bounds.south === bounds.north) {
     clearSelection(); // un clic sin arrastrar no es una zona
@@ -1422,6 +1603,96 @@ document.addEventListener("mouseup", (event) => {
   }
   drawSelection(bounds);
   openSelectionMenu(bounds);
+}
+document.addEventListener("mouseup", (event) => finishSelection(lngLatOf(event)));
+
+// Táctil: mismo arrastre con un dedo. `touchmove` no es pasivo para que la página no se desplace.
+// Pulsación larga (móvil): mantener el dedo 0,5 s sobre el mapa equivale a Ctrl en escritorio. Un
+// círculo de progreso marca la espera; al cumplirse (vibración) el mapa deja de moverse y se sigue
+// arrastrando para dibujar el recuadro. El pequeño temblor del dedo durante la espera no la
+// cancela (solo un desplazamiento claro), y el recuadro empieza donde está el dedo en ese momento.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 24; // más que esto es un desplazamiento normal del mapa
+let pressTimer: number | undefined;
+let pressOrigin: { x: number; y: number } | null = null;
+let pressLast: { x: number; y: number } | null = null;
+let pressRing: HTMLElement | null = null;
+function cancelLongPress(): void {
+  window.clearTimeout(pressTimer);
+  pressTimer = undefined;
+  pressOrigin = null;
+  pressLast = null;
+  pressRing?.remove();
+  pressRing = null;
+}
+function showPressRing(clientX: number, clientY: number): void {
+  pressRing = document.createElement("div");
+  pressRing.className = "hold-ring";
+  pressRing.style.left = `${clientX}px`;
+  pressRing.style.top = `${clientY}px`;
+  pressRing.style.setProperty("--hold-ms", `${LONG_PRESS_MS}ms`);
+  document.body.append(pressRing);
+}
+
+map.on("touchstart", (event) => {
+  if (selecting) {
+    if (event.points.length !== 1) return;
+    event.preventDefault();
+    closeMenu();
+    anchor = event.lngLat;
+    drawSelection(boundsOf(anchor, anchor));
+    return;
+  }
+  cancelLongPress();
+  if (!isMobile() || event.points.length !== 1) return;
+  pressOrigin = { x: event.point.x, y: event.point.y };
+  pressLast = pressOrigin;
+  const touch = (event.originalEvent as TouchEvent).touches[0];
+  showPressRing(touch.clientX, touch.clientY);
+  pressTimer = window.setTimeout(() => {
+    const finger = pressLast ?? pressOrigin;
+    cancelLongPress();
+    if (!finger) return;
+    navigator.vibrate?.(30); // aviso táctil de que ya se puede arrastrar
+    closeMenu();
+    setPanelOpen(false);
+    setSelecting(true); // desactiva el arrastre del mapa: ya no se mueve
+    anchor = map.unproject([finger.x, finger.y]); // donde está el dedo ahora, no donde empezó
+    drawSelection(boundsOf(anchor, anchor));
+  }, LONG_PRESS_MS);
+});
+map.on("touchmove", (event) => {
+  if (!pressOrigin) return;
+  pressLast = { x: event.point.x, y: event.point.y };
+  const moved = Math.hypot(event.point.x - pressOrigin.x, event.point.y - pressOrigin.y);
+  if (moved > LONG_PRESS_MOVE_PX || event.points.length !== 1) cancelLongPress();
+});
+for (const type of ["touchend", "touchcancel"] as const) map.on(type, cancelLongPress);
+// El menú contextual del navegador al mantener pulsado taparía el gesto.
+map.getContainer().addEventListener("contextmenu", (event) => {
+  if (isMobile()) event.preventDefault();
+});
+// El arrastre del recuadro se atiende en captura sobre el contenedor del mapa y NO se deja llegar a
+// MapLibre: así el mapa no se mueve aunque el dedo ya estuviera apoyado (pulsación larga) cuando
+// empezó la selección. `touchmove` no es pasivo para poder cancelarlo.
+map.getContainer().addEventListener(
+  "touchmove",
+  (event) => {
+    if (!selecting || !anchor) return;
+    event.preventDefault();
+    event.stopPropagation();
+    drawSelection(boundsOf(anchor, lngLatOf(event.touches[0])));
+  },
+  { capture: true, passive: false },
+);
+document.addEventListener("touchend", (event) => {
+  if (selecting && anchor) finishSelection(lngLatOf(event.changedTouches[0]));
+});
+document.addEventListener("touchcancel", () => {
+  if (selecting && anchor) {
+    clearSelection();
+    setSelecting(false);
+  }
 });
 
 // --- Un incendio en el globo ("Ver en el globo" del histórico) -----------------------------------
@@ -1457,14 +1728,14 @@ function boundsOfGeometry(geometry: GeoJSON.Geometry, bounds: maplibregl.LngLatB
 
 async function focusFire(eventId: string, fromUrl = false): Promise<void> {
   const modals = fromUrl ? null : suspendModals();
-  const token = setBusy(true, "Cargando el incendio…");
+  const token = setBusy(true, "Loading the fire…");
   let detail: EventDetail;
   try {
     detail = await fetchJson<EventDetail>(`/events/${encodeURIComponent(eventId)}`, {
       limit: String(FOCUS_DETECTIONS),
     });
   } catch (error) {
-    setBusy(false, `No se pudo cargar el incendio: ${(error as Error).message}`);
+    setBusy(false, `Could not load the fire: ${(error as Error).message}`);
     modals?.resume();
     return;
   }
@@ -1521,11 +1792,11 @@ async function focusFire(eventId: string, fromUrl = false): Promise<void> {
 
   // Barra superior con el incendio y cómo salir.
   const p = detail.event.properties;
-  focusTitle.textContent = `Incendio del ${dateRangeLabel(p.first_detection, p.last_detection)}`;
+  focusTitle.textContent = `Fire of ${dateRangeLabel(p.first_detection, p.last_detection)}`;
   focusSub.textContent =
-    `${formatNumber(Number(p.n_detections ?? 0))} detecciones · FRP máx. ${p.frp_max_mw ?? "—"} MW` +
-    (detail.detections.truncated ? ` · se muestran ${formatNumber(detail.detections.count)}` : "");
-  focusBack.innerHTML = `<span aria-hidden="true">←</span> ${fromUrl ? "Volver" : "Volver al histórico"}`;
+    `${formatNumber(Number(p.n_detections ?? 0))} detections · max FRP ${p.frp_max_mw ?? "—"} MW` +
+    (detail.detections.truncated ? ` · showing ${formatNumber(detail.detections.count)}` : "");
+  focusBack.innerHTML = `<span aria-hidden="true">←</span> ${fromUrl ? "Back" : "Back to the history"}`;
   focusBar.hidden = false;
   alertsControl.hidden = true;
   statusElement.textContent = FOCUS_STATUS;
@@ -1607,8 +1878,8 @@ async function start(): Promise<void> {
     updateMonthsHint();
   }
   if (!borders) {
-    countryName.textContent = "Sin conexión";
-    setBusy(false, "No se pudieron cargar los países. ¿Está la API en marcha?");
+    countryName.textContent = "No connection";
+    setBusy(false, "Could not load the countries. Is the API running?");
     return;
   }
   countries = borders;
@@ -1623,6 +1894,11 @@ async function start(): Promise<void> {
   // la página se abre ya encuadrada.
   const fromHash = decodeURIComponent(location.hash.slice(1)).toUpperCase();
   selectCountry(fromHash && countryByCode(fromHash) ? fromHash : DEFAULT_COUNTRY, false);
+  // La pantalla de carga se retira en cuanto el mapa está pintado (sin esperar a los datos de
+  // incendios, que siguen cargándose con la barra del panel), con un tope por si no llega a quedar
+  // inactivo (por ejemplo, teselas lentas).
+  map.once("idle", hideSplash);
+  window.setTimeout(hideSplash, SPLASH_MAX_WAIT_MS);
 
   // ?fire=ID (desde la pestaña de incendios): se abre ya enfocado en ese incendio.
   const fireId = new URLSearchParams(location.search).get("fire");

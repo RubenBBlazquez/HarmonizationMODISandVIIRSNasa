@@ -113,7 +113,41 @@ button { font: inherit; cursor: pointer; }
 .globe-tip:not(.pinned) .maplibregl-popup-content { pointer-events: none; }
 .globe-tip .maplibregl-popup-tip { display: none; }
 
+.globe-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.panel-close, .filters-fab {
+  border: 1px solid #d9e2d6;
+  background: #f4f7f2;
+  color: #2f4a39;
+}
+.panel-close { width: 26px; height: 26px; border-radius: 8px; font-size: 12px; line-height: 1; }
+.panel-close:hover, .filters-fab:hover { background: #e9f0e5; }
+.globe-panel.panel-hidden { display: none; }
+/* Botón del embudo: en el mismo sitio que el panel cuando está oculto. */
+.filters-fab {
+  position: fixed;
+  z-index: 4;
+  top: 12px;
+  left: 12px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 4px 16px #0006;
+}
+.filters-fab[hidden] { display: none; }
+
+/* Móvil: el panel de filtros se abre como hoja superior (con el embudo) y se oculta con la ✕. */
 @media (max-width: 650px) {
-  .globe-panel { top: auto; bottom: 12px; right: 12px; width: auto; max-height: 55vh; overflow-y: auto; }
-  .alerts-control { top: 8px; }
+  .globe-panel {
+    z-index: 5;
+    top: calc(8px + env(safe-area-inset-top));
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-height: 80vh;
+    max-height: 80dvh;
+    overflow-y: auto;
+  }
 }

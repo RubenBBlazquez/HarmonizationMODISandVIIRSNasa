@@ -34,26 +34,26 @@ helpElement.innerHTML = [
   DETECTION_HELP,
   DURATION_HELP,
   `**${BIOMASS_HELP}`,
-  "*La huella (área de los píxeles detectados) no es superficie quemada.",
+  "*The footprint (area of the detected pixels) is not burned area.",
 ]
   .map((text) => escapeHtml(text))
   .join("<br>");
 
 function zoneText(): string {
   const [west, south, east, north] = bbox.split(",").map(Number);
-  return `Zona: lat ${south.toFixed(3)} a ${north.toFixed(3)} · lon ${west.toFixed(3)} a ${east.toFixed(3)}`;
+  return `Zone: lat ${south.toFixed(3)} to ${north.toFixed(3)} · lon ${west.toFixed(3)} to ${east.toFixed(3)}`;
 }
 
 async function load(): Promise<void> {
   if (!bbox) {
-    statusElement.textContent = "Falta la zona. Abre esta página desde el mapa (Seleccionar zona).";
+    statusElement.textContent = "Missing zone. Open this page from the map (Select zone).";
     return;
   }
 
   try {
     if (mode === "history") {
       // El histórico trae su propia cabecera, indicadores, gráfico y ayuda.
-      titleElement.textContent = "Incendios de años anteriores";
+      titleElement.textContent = "Fires from previous years";
       for (const element of [criteriaElement, helpElement, statusElement]) element.hidden = true;
       historyElement.hidden = false;
       historyElement.innerHTML = historyLoadingHtml();
@@ -66,8 +66,8 @@ async function load(): Promise<void> {
       });
       renderHistory(historyElement, data, { bbox, start, end, years: Number(years) });
     } else {
-      titleElement.textContent = "Incendios en la zona";
-      const dates = start && end ? ` · del ${formatDay(start)} al ${formatDay(end)}` : "";
+      titleElement.textContent = "Fires in the zone";
+      const dates = start && end ? ` · from ${formatDay(start)} to ${formatDay(end)}` : "";
       criteriaElement.textContent = `${zoneText()}${dates}.`;
       const query: Record<string, string> = {
         bbox,
@@ -81,11 +81,11 @@ async function load(): Promise<void> {
         Number(feature.properties.zone_detections ?? feature.properties.n_detections);
       const largest = [...data.features].sort((a, b) => inZone(b) - inZone(a));
       const shown = Math.min(largest.length, MAX_CARDS);
-      statusElement.textContent = `${formatNumber(data.total)} incendios; se muestran los ${formatNumber(shown)} mayores. *La huella no es superficie quemada.`;
+      statusElement.textContent = `${formatNumber(data.total)} fires; showing the ${formatNumber(shown)} largest. *The footprint is not burned area.`;
       renderCards(gridElement, largest, false);
     }
   } catch (error) {
-    statusElement.textContent = `No se pudieron cargar los incendios: ${(error as Error).message}`;
+    statusElement.textContent = `Could not load the fires: ${(error as Error).message}`;
   }
 }
 

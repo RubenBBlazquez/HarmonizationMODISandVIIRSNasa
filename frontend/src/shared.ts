@@ -51,19 +51,19 @@ export function pixelStyle(feature: GeoJSON.Feature | undefined): L.PathOptions 
 
 /** Cómo se estima la biomasa quemada, para explicarlo en la interfaz. */
 export const BIOMASS_HELP =
-  "Biomasa quemada (estimación): energía radiada del incendio (el FRP de cada pasada de satélite " +
-  "× el tiempo que representa, hasta 6 h) × 0,368 kg/MJ. Sirve para comparar incendios; no " +
-  "incluye lo que los satélites no detectan.";
+  "Burned biomass (estimate): radiated energy of the fire (the FRP of each satellite pass " +
+  "× the time it represents, up to 6 h) × 0.368 kg/MJ. Useful to compare fires; it " +
+  "does not include what satellites do not detect.";
 
 /** Cómo se mide la duración, para explicarlo en la interfaz. */
 export const DURATION_HELP =
-  "Duración: tiempo entre la primera y la última detección de satélite. Es un mínimo: el fuego " +
-  "empieza antes de la primera pasada y sigue después de la última.";
+  "Duration: time between the first and the last satellite detection. It is a minimum: the fire " +
+  "starts before the first pass and continues after the last one.";
 
 /** Qué es una detección, para explicarlo en la interfaz. */
 export const DETECTION_HELP =
-  "Una detección es un píxel en el que un satélite (MODIS o VIIRS) registró fuego activo en " +
-  "una pasada. Un incendio grande o largo suma muchas detecciones.";
+  "A detection is a pixel in which a satellite (MODIS or VIIRS) recorded active fire during " +
+  "a pass. A large or long fire adds up many detections.";
 
 // Código de satélite de FIRMS -> nombre. MODIS vuela en Aqua (A) y Terra (T); VIIRS, en Suomi NPP
 // (N), NOAA-20 (N20) y NOAA-21 (N21).
@@ -76,10 +76,10 @@ const SATELLITE_NAMES: Record<string, string> = {
 };
 
 const CONFIDENCE_LABELS: Record<string, string> = {
-  low: "baja",
-  medium: "media",
-  high: "alta",
-  very_high: "muy alta",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  very_high: "very high",
   nominal: "nominal",
 };
 
@@ -133,6 +133,8 @@ export interface HistoryPeriod {
   events: number;
   detections: number;
   frp_max_mw: number | null;
+  /** Incendios del periodo por nivel de severidad (``low`` … ``extreme``, ``none``). */
+  severity: Record<string, number>;
 }
 
 export interface HistoryResponse {
@@ -151,7 +153,7 @@ export function escapeHtml(value: string | number | null | undefined): string {
 }
 
 export function formatNumber(value: number): string {
-  return value.toLocaleString("es-ES");
+  return value.toLocaleString("en-US");
 }
 
 export function formatDate(iso: string | number | null | undefined): string {
@@ -190,7 +192,7 @@ export function detectionTooltip(properties: Properties): string {
 /** "1 detección" / "12 detecciones". */
 export function detectionsLabel(value: string | number | null | undefined): string {
   const count = Number(value ?? 0);
-  return `${formatNumber(count)} ${count === 1 ? "detección" : "detecciones"}`;
+  return `${formatNumber(count)} ${count === 1 ? "detection" : "detections"}`;
 }
 
 export function confidenceLabel(value: string | number | null | undefined): string {
@@ -198,7 +200,7 @@ export function confidenceLabel(value: string | number | null | undefined): stri
 }
 
 function decimal(value: number): string {
-  return value.toFixed(1).replace(".", ",");
+  return value.toFixed(1);
 }
 
 /**
@@ -211,19 +213,105 @@ export function durationLabel(
   passes?: string | number | null,
 ): string {
   if (typeof first !== "string" || typeof last !== "string") return "—";
-  if (Number(passes) === 1) return "visto en 1 pasada";
+  if (Number(passes) === 1) return "seen in 1 pass";
   const hours = (Date.parse(last) - Date.parse(first)) / 3_600_000;
-  if (hours < 1) return "menos de 1 h";
+  if (hours < 1) return "less than 1 h";
   if (hours < 48) return `${decimal(hours)} h`;
-  return `${decimal(hours / 24)} días`;
+  return `${decimal(hours / 24)} days`;
 }
 
 /** "20 pasadas · hueco máx. 11,5 h": cuántas veces vio el fuego un satélite y el mayor silencio. */
 export function passesLabel(properties: Properties): string {
   const passes = Number(properties.n_passes ?? 0);
   if (!passes) return "—";
-  if (passes === 1) return "1 pasada";
-  return `${formatNumber(passes)} pasadas · hueco máx. ${decimal(Number(properties.max_pass_gap_hours ?? 0))} h`;
+  if (passes === 1) return "1 pass";
+  return `${formatNumber(passes)} passes · max gap ${decimal(Number(properties.max_pass_gap_hours ?? 0))} h`;
+}
+
+/** "12 min ago", "3 h ago", "2 d ago": cuánto hace de un instante ISO (vacío si no es válido). */
+export function timeAgoLabel(iso: string | number | null | undefined): string {
+  const time = typeof iso === "string" ? Date.parse(iso) : NaN;
+  if (Number.isNaN(time)) return "—";
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60_000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} d ago`;
+}
+
+/** Antigüedad de una detección: "fresh" (< 6 h), "recent" (< 24 h) o "old". */
+export function freshnessClass(iso: string | number | null | undefined): "fresh" | "recent" | "old" {
+  const hours = (Date.now() - Date.parse(String(iso))) / 3_600_000;
+  if (hours < 6) return "fresh";
+  return hours < 24 ? "recent" : "old";
+}
+
+export const SEVERITY_COLORS: Record<string, string> = {
+  low: "#5fa86f",
+  moderate: "#f0b429",
+  high: "#e2603a",
+  extreme: "#8a1c2b",
+  none: "#b9c3d0",
+};
+
+export const SEVERITY_ORDER = ["low", "moderate", "high", "extreme"] as const;
+const SEVERITY_LABELS: Record<string, string> = {
+  low: "Mild",
+  moderate: "Moderate",
+  high: "Severe",
+  extreme: "Extreme",
+};
+export const SEVERITY_HELP =
+  "Estimated severity based on burned biomass (or max FRP if there is no estimate). Indicative only.";
+
+export function severityLabel(value: string | number | null | undefined): string {
+  return SEVERITY_LABELS[String(value)] ?? "Unclassified";
+}
+
+const LAND_COVER_LABELS: Record<string, string> = {
+  crops: "Cropland",
+  trees: "Forest / trees",
+  shrub_and_scrub: "Shrubland",
+  grass: "Grassland",
+  built: "Urban area",
+  bare: "Bare ground",
+  water: "Water",
+  flooded_vegetation: "Flooded vegetation",
+  other: "Other uses",
+};
+
+/** Land-cover classes in legend order, with their colour (SIGPAC classes plus "none"). */
+export const LAND_COVER_KEYS = [
+  { key: "crops", label: "Cropland", color: "#d9b44a" },
+  { key: "trees", label: "Forest / trees", color: "#2f7d4f" },
+  { key: "shrub_and_scrub", label: "Shrubland", color: "#8a9a3b" },
+  { key: "grass", label: "Grassland", color: "#9ccc65" },
+  { key: "built", label: "Urban area", color: "#8d6e63" },
+  { key: "bare", label: "Bare ground", color: "#bfae98" },
+  { key: "water", label: "Water", color: "#4a90c2" },
+  { key: "flooded_vegetation", label: "Flooded vegetation", color: "#3fa7a0" },
+  { key: "other", label: "Other uses", color: "#8a8f98" },
+  { key: "none", label: "No data", color: "#ffffff" },
+] as const;
+
+/**
+ * Legend keys of a `land_cover` value. A boundary parcel has several classes (`crops|trees`): it
+ * counts as all of them, so it stays visible while any of its classes is shown. No value → "none".
+ */
+export function landCoverKeys(value: string | number | null | undefined): string[] {
+  if (value == null || value === "") return ["none"];
+  const known = new Set<string>(LAND_COVER_KEYS.map((item) => item.key));
+  return [...new Set(String(value).split("|").map((part) => (known.has(part) ? part : "other")))];
+}
+
+/** Tipo de zona: "Forestal / arbolado" (varias clases se unen con " / "); "No data" si falta. */
+export function landCoverLabel(value: string | number | null | undefined): string {
+  if (value == null || value === "") return "No data";
+  return String(value)
+    .split("|")
+    .map((part) => LAND_COVER_LABELS[part] ?? part)
+    .join(" / ");
 }
 
 /** Biomasa quemada estimada: "≈ 95 kg", "≈ 12,4 t" o "≈ 99.556 t". */
@@ -260,37 +348,39 @@ export async function fetchJson<T>(
 }
 
 export function detectionPopup(properties: Properties): string {
-  return `<b>Detección ${sensorLabel(properties)}</b><br>
+  return `<b>Detection ${sensorLabel(properties)}</b><br>
     ${formatDate(properties.acq_datetime)}<br>
     FRP: <b>${escapeHtml(properties.frp_mw)} MW</b> (${escapeHtml(properties.frp_category)})<br>
-    Confianza: ${confidenceLabel(properties.confidence)} ·
-    ${properties.daynight === "D" ? "día" : "noche"}<br>
-    Biomasa: ${escapeHtml(properties.biomass_kg_s)} kg/s<br>
-    Área: ${escapeHtml(properties.area_width_km)} × ${escapeHtml(properties.area_height_km)} km<br>
-    Cobertura del suelo: ${escapeHtml(properties.land_cover)}`;
+    Confidence: ${confidenceLabel(properties.confidence)} ·
+    ${properties.daynight === "D" ? "day" : "night"}<br>
+    Biomass: ${escapeHtml(properties.biomass_kg_s)} kg/s<br>
+    Area: ${escapeHtml(properties.area_width_km)} × ${escapeHtml(properties.area_height_km)} km<br>
+    Land cover: ${escapeHtml(landCoverLabel(properties.land_cover))}`;
 }
 
 /** "12 detecciones en la zona" si el incendio se buscó dentro de una zona; si no, el total. */
 export function zoneDetectionsLabel(properties: Properties): string {
   return properties.zone_detections == null
     ? detectionsLabel(properties.n_detections)
-    : `${detectionsLabel(properties.zone_detections)} en la zona`;
+    : `${detectionsLabel(properties.zone_detections)} in the zone`;
 }
 
 export function eventPopup(properties: Properties): string {
   const zone =
     properties.zone_detections == null
       ? ""
-      : `En la zona: <b>${detectionsLabel(properties.zone_detections)}</b>
-        (FRP máx. ${escapeHtml(properties.zone_frp_max_mw)} MW)<br>`;
-  return `<b>Incendio ${properties.status === "active" ? "activo" : "cerrado"}</b>
+      : `In the zone: <b>${detectionsLabel(properties.zone_detections)}</b>
+        (max FRP ${escapeHtml(properties.zone_frp_max_mw)} MW)<br>`;
+  return `<b>Fire ${properties.status === "active" ? "active" : "closed"}</b>
     (${sensorsLabel(properties.sensors)})<br>
     ${formatDate(properties.first_detection)} → ${formatDate(properties.last_detection)}<br>
-    ${zone}Incendio completo: ${detectionsLabel(properties.n_detections)} · FRP máx.:
-    <b>${escapeHtml(properties.frp_max_mw)} MW</b> · biomasa quemada
+    ${zone}Whole fire: ${detectionsLabel(properties.n_detections)} · max FRP:
+    <b>${escapeHtml(properties.frp_max_mw)} MW</b> · burned biomass
     <b title="${escapeHtml(BIOMASS_HELP)}">${biomassLabel(properties.biomass_burned_kg)}</b><br>
-    Duración: ${durationLabel(properties.first_detection, properties.last_detection, properties.n_passes)}
+    Duration: ${durationLabel(properties.first_detection, properties.last_detection, properties.n_passes)}
     (${passesLabel(properties)})<br>
-    Confianza: ${confidenceLabel(properties.confidence)}<br>
-    Huella: ${escapeHtml(properties.footprint_area_km2)} km² (no es superficie quemada)`;
+    Severity: <b title="${escapeHtml(SEVERITY_HELP)}">${severityLabel(properties.severity)}</b> ·
+    Zone type: <b>${escapeHtml(landCoverLabel(properties.land_cover))}</b><br>
+    Confidence: ${confidenceLabel(properties.confidence)}<br>
+    Footprint: ${escapeHtml(properties.footprint_area_km2)} km² (not burned area)`;
 }
