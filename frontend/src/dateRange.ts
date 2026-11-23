@@ -85,6 +85,7 @@ export class DateRangePicker {
     end: { year: new Date().getUTCFullYear(), month: new Date().getUTCMonth() },
   };
   private history: (DateRange | null)[] = []; // rangos anteriores de esta apertura, para `Esc`
+  private openedWith: DateRange | null = null; // rango al abrir: la ✕ lo restaura
   private min: string | null = null;
   private max: string | null = null;
 
@@ -147,7 +148,15 @@ export class DateRangePicker {
     this.onChange(range);
   }
 
+  /** Cierra descartando lo elegido en esta apertura (vuelve al rango que había al abrir). */
+  private cancel(): void {
+    const changed = JSON.stringify(this.range) !== JSON.stringify(this.openedWith);
+    if (changed) this.apply(this.openedWith, true);
+    else this.close();
+  }
+
   private open(): void {
+    this.openedWith = this.range ? { ...this.range } : null;
     this.draft = this.range
       ? { ...this.range }
       : { start: this.min ?? todayIso(), end: this.max ?? todayIso() };
@@ -240,6 +249,9 @@ export class DateRangePicker {
       (preset, index) => `<button type="button" data-preset="${index}">${preset.label}</button>`,
     );
     this.popover.innerHTML = `
+      <div class="date-range-header"><b>Choose dates</b>
+        <button type="button" class="date-range-cancel" data-cancel aria-label="Close without changing the dates"
+          title="Close without changing the dates">✕</button></div>
       <div class="date-range-panels">${PANELS.map((panel) => this.calendarHtml(panel)).join("")}</div>
       <p class="date-range-note">Esc undoes the last choice · the start cannot be later than the end
         (to move the start past the end, change the end first).</p>
@@ -295,7 +307,8 @@ export class DateRangePicker {
     if (!button || button.disabled) return;
 
     const panel = button.dataset.panel as Panel | undefined;
-    if (button.dataset.done !== undefined) this.close();
+    if (button.dataset.cancel !== undefined) this.cancel();
+    else if (button.dataset.done !== undefined) this.close();
     else if (button.dataset.preset) this.applyPreset(PRESETS[Number(button.dataset.preset)]);
     else if (panel && button.dataset.step) this.shiftMonth(panel, Number(button.dataset.step));
     else if (panel && button.dataset.day) this.pickDay(panel, button.dataset.day);

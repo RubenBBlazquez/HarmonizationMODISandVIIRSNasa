@@ -28,3 +28,9 @@
 .date-range-presets { display: flex; flex-wrap: wrap; gap: 4px; }
 .date-range-presets button { border: 1px solid #e4e9e2; background: #fff; border-radius: 99px; padding: 3px 8px; font-size: 10.5px; color: #2f4a39; }
 .date-range-presets button:hover { background: #f2f7ee; }
+
+/* Cabecera con título y ✕ (cerrar sin cambiar las fechas). */
+.date-range-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.date-range-header b { font-size: 12px; color: #2f4a39; }
+.date-range-cancel { flex: none; width: 26px; height: 26px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 8px; font-size: 12px; line-height: 1; }
+.date-range-cancel:hover { background: #e9f0e5; }
