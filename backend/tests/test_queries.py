@@ -444,6 +444,7 @@ def test_fetch_history_fills_empty_periods_and_tags_events_with_their_year():
         "events": 0,
         "detections": 0,
         "frp_max_mw": None,
+        "severity": {},
     }
     assert result["events"]["count"] == 1
     assert result["events"]["features"][0]["properties"]["period"] == "2024"
@@ -605,3 +606,100 @@ def test_fetch_yearly_without_data_returns_no_years():
     connection = FakeConnection([])
 
     assert queries.fetch_yearly(connection, Filters(day_window=(812, 818)))["years"] == []
+
+
+@pytest.mark.parametrize(
+    ("frp_max", "biomass_kg", "expected"),
+    [
+        (500.0, 10_000.0, "low"),  # manda la biomasa si existe
+        (1.0, 50_000.0, "moderate"),
+        (1.0, 4_999_999.0, "high"),
+        (1.0, 5_000_000.0, "extreme"),
+        (29.9, None, "low"),  # sin biomasa se usa el FRP máximo
+        (100.0, None, "high"),
+        (900.0, None, "extreme"),
+        (None, None, None),
+    ],
+)
+def test_classify_severity_uses_biomass_and_falls_back_to_frp(frp_max, biomass_kg, expected):
+    assert queries.classify_severity(frp_max, biomass_kg) == expected
+
+
+def test_event_feature_includes_severity_and_land_cover():
+    row = {
+        "event_id": "evt_1",
+        "status": "closed",
+        "first_detection": WHEN,
+        "last_detection": WHEN,
+        "n_detections": 5,
+        "sensors": "VIIRS",
+        "frp_max": 30.0,
+        "biomass_max_kg_s": 1.0,
+        "confidence_fused": "medium",
+        "footprint_area_km2": 1.0,
+        "geometry": POINT,
+    }
+
+    plain = event_feature(row)["properties"]
+    covered = event_feature({**row, "land_cover": "trees", "biomass_burned_kg": 600_000.0})[
+        "properties"
+    ]
+
+    assert (plain["severity"], plain["land_cover"]) == ("moderate", None)
+    assert (covered["severity"], covered["land_cover"]) == ("high", "trees")
+
+
+def test_every_event_query_selects_the_land_cover():
+    filters = Filters(bbox=SPAIN_BBOX)
+    periods = queries.history_periods(date(2025, 7, 1), date(2025, 7, 31), years=1)
+    sqls = [
+        events_query(filters).sql,
+        events_query(filters, match="inside").sql,
+        queries.history_events_query(SPAIN_BBOX, periods, 5)[0],
+        queries.EVENT_DETAIL_SQL,
+    ]
+
+    for sql in sqls:
+        assert queries.EVENT_LAND_COVER_SQL in sql
+
+
+def test_history_events_query_orders_by_the_requested_sort():
+    periods = queries.history_periods(date(2025, 7, 1), date(2025, 7, 31), years=1)
+
+    severity, _ = queries.history_events_query(SPAIN_BBOX, periods, 5, "severity")
+    recent, _ = queries.history_events_query(SPAIN_BBOX, periods, 5, "recent")
+
+    assert "ORDER BY e.biomass_burned_kg DESC NULLS LAST" in severity
+    assert "ORDER BY e.last_detection DESC" in recent
+    with pytest.raises(ValueError):
+        queries.history_events_query(SPAIN_BBOX, periods, 5, "random")
+
+
+def test_history_summary_query_counts_severity_in_the_same_query():
+    periods = queries.history_periods(date(2025, 7, 1), date(2025, 7, 31), years=1)
+
+    sql, _ = queries.history_summary_query(SPAIN_BBOX, periods)
+
+    for level in ("low", "moderate", "high", "extreme", "none"):
+        assert f"AS sev_{level}" in sql
+    assert "e.biomass_burned_kg >= 5000000.0 THEN 'extreme'" in sql
+    assert sql.count("WITH periods") == 1  # un solo recorrido de las detecciones
+
+
+def test_fetch_history_returns_the_severity_counts_of_each_period():
+    periods = queries.history_periods(date(2025, 7, 1), date(2025, 7, 31), years=1)
+    base = {"events": 0, "detections": 0, "frp_max": None}
+    levels = {f"sev_{level}": 0 for level in (*queries.SEVERITY_LEVELS, "none")}
+    totals = [
+        {"label": periods[0].label, **base, **levels},
+        {
+            "label": periods[1].label,
+            **base,
+            **{**levels, "sev_low": 2, "sev_extreme": 1, "sev_none": 1},
+        },
+    ]
+
+    result = queries.fetch_history(FakeConnection(totals, []), SPAIN_BBOX, periods, 10)
+
+    assert result["periods"][1]["severity"] == {"low": 2, "extreme": 1, "none": 1}
+    assert result["periods"][0]["severity"] == {}

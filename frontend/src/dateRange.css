@@ -24,7 +24,7 @@
 .date-range-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf0eb; }
 .date-range-done { border: 0; background: #2f5d43; color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 11px; font-weight: 600; }
 .date-range-done:hover { background: #27503a; }
-@media (max-width: 640px) { .date-range-popover { width: 270px; } .date-range-panels { grid-template-columns: 1fr; } .date-range-panel + .date-range-panel { border-left: 0; padding-left: 0; border-top: 1px solid #edf0eb; padding-top: 10px; } }
+@media (max-width: 640px) { .date-range-popover { width: min(270px, calc(100vw - 16px)); } .date-range-panels { grid-template-columns: 1fr; } .date-range-panel + .date-range-panel { border-left: 0; padding-left: 0; border-top: 1px solid #edf0eb; padding-top: 10px; } }
 .date-range-presets { display: flex; flex-wrap: wrap; gap: 4px; }
 .date-range-presets button { border: 1px solid #e4e9e2; background: #fff; border-radius: 99px; padding: 3px 8px; font-size: 10.5px; color: #2f4a39; }
 .date-range-presets button:hover { background: #f2f7ee; }

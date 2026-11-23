@@ -15,7 +15,7 @@
 .activity-item-meta { margin-top: 3px; font-size: 11px; color: #6d7b72; }
 .activity-badge { font-size: 10px; font-weight: 700; border-radius: 99px; padding: 2px 8px; background: #eef1ee; color: #5b6b62; }
 .activity-badge.active { background: #fbe9e6; color: #b03a28; }
-.activity-reopen { position: fixed; z-index: 1000; top: 16px; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 7px; border: 1px solid #dfe7dc; border-right: 0; border-radius: 12px 0 0 12px; background: rgba(255,255,255,.96); color: #2f5d43; box-shadow: -2px 2px 12px #263c2933; transition: background .15s ease, padding .15s ease; }
+.activity-reopen { position: fixed; z-index: 1000; top: 120px; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 7px; border: 1px solid #dfe7dc; border-right: 0; border-radius: 12px 0 0 12px; background: rgba(255,255,255,.96); color: #2f5d43; box-shadow: -2px 2px 12px #263c2933; transition: background .15s ease, padding .15s ease; }
 .activity-reopen[hidden] { display: none; }
 .activity-reopen:hover, .activity-reopen:focus-visible { background: #2f5d43; color: #fff; padding-right: 11px; }
 .activity-reopen-label { writing-mode: vertical-rl; font-size: 11px; font-weight: 600; letter-spacing: .4px; white-space: nowrap; }
@@ -74,12 +74,14 @@
 .alerts-bell { color:var(--alert-color,#8a8f98); font-size:15px; }
 .alerts-count { min-width:18px; padding:1px 5px; border-radius:99px; background:#eef1ee; text-align:center; font-weight:700; }
 .alerts-toggle.has-alerts .alerts-count { background:#fbe9e6; }
-.alerts-list { margin-top:4px; padding:4px; max-height:240px; overflow:auto; background:rgba(255,255,255,.97); border:1px solid #dfe7dc; border-radius:8px; box-shadow:0 2px 8px #263c291c; }
+.alerts-list { width:min(320px, calc(100vw - 24px)); margin:4px 0 0 calc((100% - min(320px, calc(100vw - 24px))) / 2); padding:4px; max-height:240px; overflow:auto; background:rgba(255,255,255,.97); border:1px solid #dfe7dc; border-radius:8px; box-shadow:0 2px 8px #263c291c; }
 .alerts-list[hidden] { display:none; }
-.alert-item { display:flex; align-items:center; gap:8px; width:100%; border:0; background:none; text-align:left; padding:7px; border-radius:5px; color:#405247; font-size:10px; }
+.alert-item { display:flex; align-items:center; gap:10px; width:100%; border:0; background:none; text-align:left; padding:8px; border-radius:5px; color:#405247; font-size:11px; }
 .alert-item:hover { background:#f0f4ee; }
 .alert-item i { width:10px; height:10px; flex:none; border-radius:50%; background:var(--alert-color); box-shadow:0 0 0 3px color-mix(in srgb, var(--alert-color) 22%, transparent); }
-.alert-item b,.alert-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:120px; }
+.alert-item b,.alert-item small { display:block; }
+.alert-item b { color:#26362c; font-size:12px; }
+.alert-item small { font-size:11px; line-height:1.4; }
 .alert-item small { color:#6d7b72; margin-top:2px; }
 .alerts-empty { padding:8px; color:#6d7b72; font-size:10px; }
 .active-zone-marker { background: transparent; border: 0; }
@@ -90,20 +92,60 @@
 .google-maps-report:hover { background:#2f6fd0; }
 
 /* --- Posición de los controles sobre el globo (en el mapa Leaflet los colocaba Leaflet) --- */
-.filters-control { position: relative; }
 .alerts-control { position: fixed; z-index: 3; top: 12px; left: 50%; transform: translateX(-50%); }
 .legend-control { position: fixed; z-index: 2; right: 12px; bottom: 28px; transition: right .25s ease; }
 .coordinates-control { position: fixed; z-index: 2; left: 12px; bottom: 28px; }
 .maplibregl-ctrl-top-right { transition: right .25s ease; }
 /* Los controles de la derecha se apartan del panel de actividad mientras está abierto. */
 body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-right { right: 364px; }
+.legend-all > summary { cursor: pointer; font-weight: 700; color: #2f4a39; }
+.legend-all[open] > summary { margin-bottom: 4px; }
+.legend-all { position: relative; }
+.legend-close, .legend-fab { display: none; }
+.legend-close { position: absolute; top: -4px; right: -4px; width: 26px; height: 26px; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 8px; font-size: 12px; line-height: 1; }
+.fab-label { display: none; }
+.mobile-bar { display: contents; }
+.legend-fab[aria-expanded="true"] { background: #2f5d43; color: #fff; }
 @media (max-width: 650px) {
-  body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-right { right: 0; }
-  .activity-panel { width: calc(100vw - 24px); top: auto; height: 45vh; }
+  /* El panel de actividad es una hoja inferior: la leyenda no tiene que apartarse. */
+  body.activity-open .legend-control { right: 8px; }
+  body.activity-open .maplibregl-ctrl-top-right { right: 0; }
+  .activity-panel { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); top: auto; width: auto; max-width: none; height: 45vh; height: 45dvh; }
+  .activity-panel.collapsed { transform: translateY(calc(100% + 24px)); }
+  /* El panel sale desde abajo: su botón es una pastilla horizontal abajo y centrada. */
+  .activity-reopen { top: auto; right: auto; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom)); transform: translateX(-50%); flex-direction: row; gap: 8px; padding: 10px 16px; border: 1px solid #dfe7dc; border-radius: 99px; box-shadow: 0 4px 16px #0006; }
+  .activity-reopen:hover, .activity-reopen:focus-visible { padding: 10px 16px; }
+  .activity-reopen svg:last-of-type { transform: rotate(90deg); } /* "<" pasa a apuntar hacia arriba */
+  .activity-reopen-label { writing-mode: horizontal-tb; font-size: 12px; }
   .coordinates-control { display: none; }
+  /* Barra superior: tres botones iguales (Filters · Alerts · Legend) a la izquierda del zoom. */
+  .mobile-bar { position: fixed; z-index: 4; display: flex; gap: 8px; top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 52px; }
+  .mobile-bar > * { flex: 1 1 0; min-width: 0; }
+  .mobile-bar .filters-fab:not([hidden]), .mobile-bar .legend-fab { position: static; display: flex; align-items: center; justify-content: center; gap: 6px; width: auto; height: 40px; padding: 0 8px; font-size: 12px; font-weight: 700; border: 1px solid #d9e2d6; border-radius: 12px; background: rgba(255,255,255,.96); color: #2f4a39; box-shadow: 0 4px 16px #0006; }
+  .mobile-bar .legend-fab[aria-expanded="true"] { background: #2f5d43; color: #fff; }
+  .fab-label { display: inline; }
+  .mobile-bar .alerts-control { position: relative; top: auto; left: auto; transform: none; min-width: 0; z-index: auto; }
+  .mobile-bar .alerts-toggle { width: 100%; height: 40px; justify-content: center; font-weight: 700; }
+  /* Lista de alertas: hoja a todo el ancho bajo la barra, centrada en la pantalla. */
+  .alerts-list { position: fixed; top: calc(56px + env(safe-area-inset-top)); left: 8px; right: 8px; width: auto; margin: 0; max-height: 60vh; max-height: 60dvh; z-index: 6; }
+  .legend-control { top: calc(56px + env(safe-area-inset-top)); bottom: auto; right: 8px; left: 8px; max-width: none; max-height: calc(100vh - 150px); max-height: calc(100dvh - 150px); overflow-y: auto; z-index: 4; }
+  .legend-control.legend-hidden { display: none; }
+  .legend-all > summary { pointer-events: none; list-style: none; }
+  .legend-all > summary::-webkit-details-marker { display: none; }
+  .legend-close { display: block; }
+  .legend-control .legend-note { max-width: none; }
+  body:has(.focus-bar:not([hidden])) .legend-control { top: 176px; }
+  body:has(.focus-bar:not([hidden])) .mobile-bar { top: 128px; }
+  .selection-menu { min-width: 0; }
+  /* El calendario se abre como hoja inferior: dentro del panel (con scroll) quedaría recortado. */
+  .date-range-popover { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); top: auto; width: auto; max-width: none; max-height: 85vh; max-height: 85dvh; overflow-y: auto; z-index: 2000; }
 }
 /* Recuadro de la selección de zona: el cursor en cruz mientras se elige. */
 .selecting canvas.maplibregl-canvas { cursor: crosshair !important; }
+/* Con el dedo, el navegador no debe interpretar el arrastre como desplazamiento mientras se dibuja. */
+.selecting .maplibregl-canvas-container, .selecting canvas.maplibregl-canvas { touch-action: none !important; }
+.select-hint { position: fixed; z-index: 7; left: 50%; bottom: calc(64px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border-radius: 99px; background: rgba(11, 22, 38, .92); color: #eef3fa; font-size: 12px; font-weight: 600; box-shadow: 0 6px 20px #0006; white-space: nowrap; }
+.select-hint button { border: 0; border-radius: 99px; background: #e2603a; color: #fff; padding: 6px 12px; font-size: 12px; font-weight: 700; }
 /* Marcador de incendio activo (MapLibre usa el elemento tal cual: necesita su tamaño). */
 /* Sin `position`: MapLibre coloca el marcador con position:absolute + transform; cambiarlo lo
    saca de su coordenada (las alertas aparecían apiladas en el mar). */
@@ -157,3 +199,33 @@ body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-righ
   .focus-bar { flex-wrap: wrap; justify-content: center; }
   .focus-text { flex-basis: 100%; text-align: center; }
 }
+
+.legend-group { margin-top: 6px; border-top: 1px solid #edf0eb; padding-top: 6px; }
+.legend-group summary { cursor: pointer; font-weight: 700; color: #2f4a39; margin-bottom: 2px; }
+.legend-group .legend-item i { border-color: #6d7b72; }
+
+/* --- Lista de alertas: pestañas (más recientes / más graves) y filas con severidad y antigüedad --- */
+.alerts-tabs { display: flex; gap: 4px; padding: 2px 2px 6px; position: sticky; top: 0; background: rgba(255,255,255,.97); }
+.alerts-tab { flex: 1; border: 1px solid #d9e2d6; background: #f4f7f2; color: #2f4a39; border-radius: 99px; padding: 5px 8px; font-size: 11px; font-weight: 700; }
+.alerts-tab[aria-pressed="true"] { background: #2f5d43; border-color: #2f5d43; color: #fff; }
+.alert-item { gap: 8px; border-bottom: 1px solid #edf0eb; border-radius: 0; }
+.alert-item:last-child { border-bottom: 0; }
+.alert-item .severity-pill { flex: none; min-width: 66px; justify-content: center; padding: 3px 8px; font-size: 10.5px; }
+.alert-body { flex: 1; min-width: 0; }
+.alert-time { flex: none; text-align: right; }
+.alert-time b { font-size: 12.5px; }
+.alert-time small { margin-top: 0; }
+.alert-time.fresh b { color: #b03a28; }
+.alert-time.recent b { color: #b9720f; }
+.alert-time.old b { color: #6d7b72; }
+
+/* El mapa gestiona sus propios gestos táctiles (la página no se desplaza): sin esto el navegador
+   podría quedarse con el arrastre tras una pulsación larga. */
+.globe .maplibregl-canvas-container, .globe canvas.maplibregl-canvas { touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+.hold-badge { display: inline-grid; place-items: center; width: 22px; height: 22px; border: 1px solid #c9d8c2; border-radius: 50%; background: #fff; color: #5d6d63; }
+.select-area.active .hold-badge { display: none; }
+
+/* Círculo de progreso de la pulsación larga (0,5 s): se llena y avisa de que va a empezar la selección. */
+.hold-ring { position: fixed; z-index: 6; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%; pointer-events: none; border: 3px solid #e2603a; background: #e2603a22; transform: scale(1.4); opacity: 0; animation: hold-ring var(--hold-ms, 1000ms) ease-out forwards; }
+@keyframes hold-ring { 15% { opacity: 1; } to { transform: scale(0.55); opacity: 1; background: #e2603a66; } }
+@media (prefers-reduced-motion: reduce) { .hold-ring { animation-duration: 1ms; opacity: 1; transform: none; } }

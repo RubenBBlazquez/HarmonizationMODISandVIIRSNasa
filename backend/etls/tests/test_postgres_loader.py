@@ -234,3 +234,11 @@ def test_database_password_is_not_serialized_in_the_config_dump():
 
     assert config.to_dict()["database"]["url"] == "***"
     assert "topsecret" not in str(config.to_dict())
+
+
+def test_load_fills_the_event_land_cover_in_one_grouped_statement():
+    from fire_etl.load.postgres import EVENT_LAND_COVER_STATEMENT
+
+    assert "mode() WITHIN GROUP (ORDER BY d.land_cover)" in EVENT_LAND_COVER_STATEMENT
+    assert "GROUP BY ed.event_id" in EVENT_LAND_COVER_STATEMENT  # una pasada, no una por incendio
+    assert EVENT_LAND_COVER_STATEMENT.startswith("UPDATE fire.fire_events")

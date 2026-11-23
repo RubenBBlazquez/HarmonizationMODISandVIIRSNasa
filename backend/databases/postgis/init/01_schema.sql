@@ -275,3 +275,22 @@ CREATE TABLE IF NOT EXISTS fire.static_sources (
 );
 
 CREATE INDEX IF NOT EXISTS static_sources_geom_gix ON fire.static_sources USING gist (geom);
+
+-- Tipo de zona del incendio: la cobertura del suelo más frecuente entre sus detecciones. Se guarda
+-- precalculada para que la API no la calcule en cada petición. El ETL la rellena tras cada carga;
+-- aquí se añade (y se rellena una vez) en las bases creadas antes de esta columna.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'fire'
+                   AND table_name = 'fire_events' AND column_name = 'land_cover') THEN
+        ALTER TABLE fire.fire_events ADD COLUMN land_cover text;
+        UPDATE fire.fire_events e SET land_cover = s.land_cover
+        FROM (
+            SELECT ed.event_id, mode() WITHIN GROUP (ORDER BY d.land_cover) AS land_cover
+            FROM fire.event_detections ed
+            JOIN fire.detections d ON d.detection_id = ed.detection_id AND d.land_cover IS NOT NULL
+            GROUP BY ed.event_id
+        ) s
+        WHERE e.event_id = s.event_id;
+    END IF;
+END $$;

@@ -5,6 +5,7 @@
 import { escapeHtml, fetchJson, formatDay, formatNumber, sensorsLabel } from "./shared.js";
 
 const ACTIVITY_LIMIT = 15;
+const MOBILE_MAX_WIDTH = 650;
 const STORAGE_KEY = "activity-panel-collapsed";
 const FOCUS_ZOOM = 12;
 
@@ -27,10 +28,12 @@ interface ActivityResponse {
 
 function readCollapsed(): boolean {
   try {
-    return window.localStorage.getItem(STORAGE_KEY) === "1";
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored !== null) return stored === "1";
   } catch {
-    return false;
+    // Sin almacenamiento: se usa el valor por defecto.
   }
+  return window.innerWidth <= MOBILE_MAX_WIDTH; // en móvil empieza cerrado (ocupa media pantalla)
 }
 
 function saveCollapsed(collapsed: boolean): void {
@@ -46,9 +49,9 @@ function itemHtml(item: ActivityItem, index: number): string {
   const detections = `${formatNumber(item.n_detections)} det.`;
   return `<li><button type="button" class="activity-item" data-index="${index}">
     <div class="activity-item-top"><span>${formatDay(item.last_detection)}</span>
-      <span class="activity-badge ${escapeHtml(item.status)}">${active ? "activo" : "cerrado"}</span></div>
+      <span class="activity-badge ${escapeHtml(item.status)}">${active ? "active" : "closed"}</span></div>
     <div class="activity-item-meta">${sensorsLabel(item.sensors)} · ${detections} ·
-      FRP máx. ${escapeHtml(item.frp_max_mw)} MW</div></button></li>`;
+      Max FRP ${escapeHtml(item.frp_max_mw)} MW</div></button></li>`;
 }
 
 /**
@@ -90,7 +93,7 @@ export function initActivityPanel(
         limit: String(ACTIVITY_LIMIT),
       });
       if (data.items.length === 0) {
-        list!.innerHTML = `<li class="activity-empty">Aún no hay incendios registrados.</li>`;
+        list!.innerHTML = `<li class="activity-empty">No fires recorded yet.</li>`;
         return;
       }
       list!.innerHTML = data.items.map(itemHtml).join("");
@@ -101,7 +104,7 @@ export function initActivityPanel(
         }),
       );
     } catch {
-      list!.innerHTML = `<li class="activity-empty">No se pudo cargar la actividad. ¿Está la API en marcha?</li>`;
+      list!.innerHTML = `<li class="activity-empty">Could not load the activity. Is the API running?</li>`;
     }
   }
   void load();

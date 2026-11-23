@@ -23,28 +23,28 @@ interface Preset {
 }
 
 const MONTHS = [
-  "enero",
-  "febrero",
-  "marzo",
-  "abril",
-  "mayo",
-  "junio",
-  "julio",
-  "agosto",
-  "septiembre",
-  "octubre",
-  "noviembre",
-  "diciembre",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
-const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
+const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"];
 const PRESETS: Preset[] = [
-  { label: "Última semana", days: 7 },
-  { label: "Último mes", days: 30 },
-  { label: "Último año", days: 365 },
-  // Sin "Todas las fechas": el mapa carga el rango entero de una vez y todo el histórico son
+  { label: "Last week", days: 7 },
+  { label: "Last month", days: 30 },
+  { label: "Last year", days: 365 },
+  // Sin "All dates": el mapa carga el rango entero de una vez y todo el histórico son
   // cientos de miles de detecciones.
 ];
-const PANEL_LABELS: Record<Panel, string> = { start: "Inicio", end: "Fin" };
+const PANEL_LABELS: Record<Panel, string> = { start: "Start", end: "End" };
 const PANELS: Panel[] = ["start", "end"];
 const FALLBACK_FIRST_YEAR = 2000;
 // Icono propio (SVG): algunos tipos de letra no pintan bien el emoji del calendario.
@@ -102,7 +102,7 @@ export class DateRangePicker {
     this.popover = document.createElement("div");
     this.popover.className = "date-range-popover";
     this.popover.setAttribute("role", "dialog");
-    this.popover.setAttribute("aria-label", "Elegir rango de fechas");
+    this.popover.setAttribute("aria-label", "Choose date range");
     this.popover.hidden = true;
     this.root.append(this.toggle, this.popover);
     container.append(this.root);
@@ -173,7 +173,7 @@ export class DateRangePicker {
   private updateLabel(): void {
     const text = this.range
       ? `${displayDay(this.range.start)} → ${displayDay(this.range.end)}`
-      : "Todas las fechas";
+      : "All dates";
     this.toggle.innerHTML = `${CALENDAR_ICON}<span>${text}</span>`;
   }
 
@@ -225,11 +225,11 @@ export class DateRangePicker {
           <b>${displayDay(this.draft[panel])}</b></div>
         <div class="date-range-head">
           <button type="button" class="nav" data-panel="${panel}" data-step="-1"
-            aria-label="Mes anterior">‹</button>
-          <select class="month" data-panel="${panel}" aria-label="Mes">${months.join("")}</select>
-          <select class="year" data-panel="${panel}" aria-label="Año">${years.join("")}</select>
+            aria-label="Previous month">‹</button>
+          <select class="month" data-panel="${panel}" aria-label="Month">${months.join("")}</select>
+          <select class="year" data-panel="${panel}" aria-label="Year">${years.join("")}</select>
           <button type="button" class="nav" data-panel="${panel}" data-step="1"
-            aria-label="Mes siguiente">›</button>
+            aria-label="Next month">›</button>
         </div>
         <div class="date-range-grid">${weekdays.join("")}${cells.join("")}</div>
       </section>`;
@@ -241,11 +241,11 @@ export class DateRangePicker {
     );
     this.popover.innerHTML = `
       <div class="date-range-panels">${PANELS.map((panel) => this.calendarHtml(panel)).join("")}</div>
-      <p class="date-range-note">Esc deshace la última elección · el inicio no puede ser posterior
-        al fin (para mover el inicio más allá del fin, cambia antes el fin).</p>
+      <p class="date-range-note">Esc undoes the last choice · the start cannot be later than the end
+        (to move the start past the end, change the end first).</p>
       <div class="date-range-footer">
         <div class="date-range-presets">${presets.join("")}</div>
-        <button type="button" class="date-range-done" data-done>Listo</button>
+        <button type="button" class="date-range-done" data-done>Done</button>
       </div>`;
   }
 

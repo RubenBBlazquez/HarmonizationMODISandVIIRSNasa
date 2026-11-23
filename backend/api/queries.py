@@ -22,6 +22,16 @@ TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 M2_PER_KM2 = 1_000_000.0
 # Pasadas de satélite y biomasa quemada (estimada) de cada evento; las rellena el pipeline.
 EVENT_STATS_SQL = "e.n_passes, e.max_pass_gap_hours, e.biomass_burned_kg"
+# Tipo de zona del incendio: la cobertura del suelo (SIGPAC) más frecuente entre sus detecciones.
+# La columna la rellena el ETL tras cada carga. Es null fuera de España o sin SIGPAC.
+EVENT_LAND_COVER_SQL = "e.land_cover"
+
+# Severidad de un incendio, de menor a mayor. Se mide con la biomasa quemada estimada (energía
+# radiada integrada: combina intensidad y duración); si no está calculada, con el FRP máximo.
+# Umbrales orientativos (superior exclusivo de cada nivel); ajustar con datos reales.
+SEVERITY_LEVELS = ("low", "moderate", "high", "extreme")
+SEVERITY_BIOMASS_LIMITS_KG = (50_000.0, 500_000.0, 5_000_000.0)
+SEVERITY_FRP_LIMITS_MW = (30.0, 100.0, 500.0)
 EVENT_GEOMETRIES = {"point": "geom_centroid", "area": "geom_hull"}
 # Cómo se decide que un evento está en el recuadro:
 # - "intersects": su envolvente lo toca (lo que se ve en pantalla; puede incluir eventos cuyas
@@ -102,11 +112,11 @@ def parse_bbox(text: str) -> tuple[float, float, float, float]:
     try:
         min_lon, min_lat, max_lon, max_lat = (float(part) for part in text.split(","))
     except ValueError as error:
-        raise InvalidBBoxError("bbox debe ser minLon,minLat,maxLon,maxLat") from error
+        raise InvalidBBoxError("bbox must be minLon,minLat,maxLon,maxLat") from error
 
     in_range = -180 <= min_lon <= max_lon <= 180 and -90 <= min_lat <= max_lat <= 90
     if not in_range:
-        raise InvalidBBoxError("bbox fuera de rango o con mínimos mayores que máximos")
+        raise InvalidBBoxError("bbox out of range or with minimums greater than maximums")
 
     return min_lon, min_lat, max_lon, max_lat
 
@@ -123,7 +133,7 @@ def day_window(start: date, end: date) -> tuple[int, int]:
     5 ene cruza el fin de año → ``(1225, 105)``. Un rango de un año o más da el año entero.
     """
     if start > end:
-        raise InvalidPeriodError("start no puede ser posterior a end")
+        raise InvalidPeriodError("start cannot be later than end")
 
     if (end - start).days >= 365:
         return 101, 1231
@@ -219,7 +229,7 @@ def detections_query(filters: Filters, geometry: str = "point") -> Query:
     ``geometry="point"`` devuelve el punto; ``"pixel"``, el área (``area_width_km`` × ``area_height_km``).
     """
     if geometry not in DETECTION_GEOMETRIES:
-        raise ValueError(f"geometry debe ser uno de {DETECTION_GEOMETRIES}")
+        raise ValueError(f"geometry must be one of {DETECTION_GEOMETRIES}")
 
     where, params = _where(
         filters,
@@ -297,7 +307,7 @@ def events_query(filters: Filters, geometry: str = "point", match: str = "inters
     devuelve el centro de esas detecciones.
     """
     if match not in EVENT_MATCHES:
-        raise ValueError(f"match debe ser uno de {EVENT_MATCHES}")
+        raise ValueError(f"match must be one of {EVENT_MATCHES}")
 
     if match == "inside":
         return _inside_events_query(filters, geometry)
@@ -315,7 +325,7 @@ def events_query(filters: Filters, geometry: str = "point", match: str = "inters
     sql = (
         "SELECT e.event_id, e.status, e.first_detection, e.last_detection, e.n_detections, "
         f"e.sensors, e.frp_max, e.biomass_max_kg_s, {EVENT_STATS_SQL}, e.confidence_fused, "
-        f"e.hull_area_m2 / {M2_PER_KM2} AS footprint_area_km2, "
+        f"e.hull_area_m2 / {M2_PER_KM2} AS footprint_area_km2, {EVENT_LAND_COVER_SQL}, "
         f"ST_AsGeoJSON(e.{column}, {COORD_DECIMALS})::json AS geometry {source} "
         "ORDER BY e.last_detection DESC, e.event_id LIMIT %s"
     )
@@ -325,7 +335,7 @@ def events_query(filters: Filters, geometry: str = "point", match: str = "inters
 
 def _inside_events_query(filters: Filters, geometry: str) -> Query:
     if filters.bbox is None:
-        raise ValueError("match=inside necesita bbox")
+        raise ValueError("match=inside needs bbox")
 
     lateral, lateral_params = _inside_lateral(filters)
     # La envolvente del evento tiene que tocar el recuadro si alguna detección cae dentro:
@@ -341,8 +351,8 @@ def _inside_events_query(filters: Filters, geometry: str) -> Query:
     sql = (
         "SELECT e.event_id, e.status, e.first_detection, e.last_detection, e.n_detections, "
         f"e.sensors, e.frp_max, e.biomass_max_kg_s, {EVENT_STATS_SQL}, e.confidence_fused, "
-        f"e.hull_area_m2 / {M2_PER_KM2} AS footprint_area_km2, z.zone_detections, "
-        f"z.zone_frp_max, ST_AsGeoJSON({geom}, {COORD_DECIMALS})::json AS geometry {source} "
+        f"e.hull_area_m2 / {M2_PER_KM2} AS footprint_area_km2, {EVENT_LAND_COVER_SQL}, "
+        f"z.zone_detections, z.zone_frp_max, ST_AsGeoJSON({geom}, {COORD_DECIMALS})::json AS geometry {source} "
         "ORDER BY e.last_detection DESC, e.event_id LIMIT %s"
     )
 
@@ -378,6 +388,22 @@ def detection_feature(row: dict[str, Any]) -> dict[str, Any]:
     return {"type": "Feature", "geometry": row["geometry"], "properties": properties}
 
 
+def classify_severity(frp_max: float | None, biomass_burned_kg: float | None) -> str | None:
+    """
+    Severidad de un incendio: ``low``, ``moderate``, ``high`` o ``extreme``.
+
+    Usa la biomasa quemada estimada y, si no hay, el FRP máximo (MW). ``None`` si no hay ninguno.
+    """
+    if biomass_burned_kg is not None:
+        value, limits = float(biomass_burned_kg), SEVERITY_BIOMASS_LIMITS_KG
+    elif frp_max is not None:
+        value, limits = float(frp_max), SEVERITY_FRP_LIMITS_MW
+    else:
+        return None
+
+    return SEVERITY_LEVELS[sum(value >= limit for limit in limits)]
+
+
 def event_feature(row: dict[str, Any]) -> dict[str, Any]:
     """Fila de ``fire.fire_events`` -> Feature GeoJSON (centroide o envolvente)."""
     properties = {
@@ -395,6 +421,9 @@ def event_feature(row: dict[str, Any]) -> dict[str, Any]:
         "biomass_burned_kg": _round(row.get("biomass_burned_kg"), 0),
         "n_passes": row.get("n_passes"),
         "max_pass_gap_hours": _round(row.get("max_pass_gap_hours"), 1),
+        "severity": classify_severity(row["frp_max"], row.get("biomass_burned_kg")),
+        # Cobertura del suelo más frecuente (puede ser varias clases separadas por "|").
+        "land_cover": row.get("land_cover"),
     }
     if row.get("zone_detections") is not None:  # solo cuando se buscó dentro de una zona
         properties["zone_detections"] = int(row["zone_detections"])
@@ -541,11 +570,11 @@ def history_periods(start: date, end: date, years: int) -> list[Period]:
         Si ``start`` es posterior a ``end`` o el rango supera un año (los periodos se solaparían).
     """
     if start > end:
-        raise InvalidPeriodError("start no puede ser posterior a end")
+        raise InvalidPeriodError("start cannot be later than end")
 
     if (end - start).days + 1 > MAX_PERIOD_DAYS:
         raise InvalidPeriodError(
-            "El rango de fechas debe ser de un año como máximo para comparar con años anteriores"
+            "The date range must be one year at most to compare with previous years"
         )
 
     periods = []
@@ -595,35 +624,77 @@ def _history_cte(
     return periods_cte + matched, [*params, *bbox]
 
 
+def _severity_sql() -> str:
+    """Nivel de severidad de ``e`` en SQL (mismos umbrales que ``classify_severity``)."""
+    def level(column: str, limits: tuple[float, ...]) -> str:
+        low, mid, high = limits
+        return (
+            f"CASE WHEN {column} >= {high} THEN 'extreme' WHEN {column} >= {mid} THEN 'high' "
+            f"WHEN {column} >= {low} THEN 'moderate' ELSE 'low' END"
+        )
+
+    return (
+        f"CASE WHEN e.biomass_burned_kg IS NOT NULL "
+        f"THEN {level('e.biomass_burned_kg', SEVERITY_BIOMASS_LIMITS_KG)} "
+        f"WHEN e.frp_max IS NOT NULL THEN {level('e.frp_max', SEVERITY_FRP_LIMITS_MW)} "
+        "ELSE 'none' END"
+    )
+
+
 def history_summary_query(
     bbox: tuple[float, float, float, float], periods: list[Period]
 ) -> tuple[str, tuple[Any, ...]]:
-    """Incendios, detecciones y FRP máximo dentro de la zona por periodo (también los vacíos)."""
+    """
+    Incendios, detecciones, FRP máximo y recuento por severidad dentro de la zona por periodo
+    (también los vacíos). Una sola consulta: ``sev_<nivel>`` cuenta los incendios de cada nivel.
+    """
     cte, params = _history_cte(bbox, periods)
+    severity = _severity_sql()
+    counts = ", ".join(
+        f"count(m.event_id) FILTER (WHERE {severity} = '{level}') AS sev_{level}"
+        for level in (*SEVERITY_LEVELS, "none")
+    )
     sql = (
         f"{cte} SELECT p.label, count(m.event_id) AS events, "
-        "coalesce(sum(m.zone_detections), 0) AS detections, max(m.zone_frp_max) AS frp_max "
+        "coalesce(sum(m.zone_detections), 0) AS detections, max(m.zone_frp_max) AS frp_max, "
+        f"{counts} "
         "FROM periods p LEFT JOIN matched m ON m.label = p.label "
+        "LEFT JOIN fire.fire_events e ON e.event_id = m.event_id "
         "GROUP BY p.label, p.p_start ORDER BY p.p_start DESC"
     )
 
     return sql, tuple(params)
 
 
+HISTORY_SORTS = {
+    "detections": "m.zone_detections DESC, e.frp_max DESC, e.event_id",
+    "recent": "e.last_detection DESC, e.event_id",
+    # Biomasa quemada (la métrica de la severidad) y, si falta, FRP máximo.
+    "severity": "e.biomass_burned_kg DESC NULLS LAST, e.frp_max DESC, e.event_id",
+}
+DEFAULT_HISTORY_SORT = "severity"
+
+
 def history_events_query(
-    bbox: tuple[float, float, float, float], periods: list[Period], limit: int
+    bbox: tuple[float, float, float, float],
+    periods: list[Period],
+    limit: int,
+    sort: str = "detections",
 ) -> tuple[str, tuple[Any, ...]]:
-    """Eventos de los años anteriores (sin el elegido), con más detecciones en la zona primero."""
+    """Eventos de los años anteriores (sin el elegido), ordenados por ``sort`` (ver ``HISTORY_SORTS``)."""
+    if sort not in HISTORY_SORTS:
+        raise ValueError(f"sort must be one of {tuple(HISTORY_SORTS)}")
+
     cte, params = _history_cte(bbox, periods)
     sql = (
         f"{cte} SELECT m.label AS period, e.event_id, e.status, e.first_detection, "
         "e.last_detection, e.n_detections, e.sensors, e.frp_max, e.biomass_max_kg_s, "
         f"{EVENT_STATS_SQL}, e.confidence_fused, "
-        f"e.hull_area_m2 / {M2_PER_KM2} AS footprint_area_km2, m.zone_detections, m.zone_frp_max, "
+        f"e.hull_area_m2 / {M2_PER_KM2} AS footprint_area_km2, {EVENT_LAND_COVER_SQL}, "
+        "m.zone_detections, m.zone_frp_max, "
         f"ST_AsGeoJSON(m.center, {COORD_DECIMALS})::json AS geometry "
         "FROM matched m JOIN fire.fire_events e ON e.event_id = m.event_id "
-        "WHERE NOT m.is_reference "
-        "ORDER BY m.zone_detections DESC, e.frp_max DESC, e.event_id LIMIT %s"
+        f"WHERE NOT m.is_reference ORDER BY {HISTORY_SORTS[sort]} LIMIT %s"
     )
 
     return sql, (*params, limit)
@@ -634,9 +705,13 @@ def fetch_history(
     bbox: tuple[float, float, float, float],
     periods: list[Period],
     limit: int,
+    sort: str = DEFAULT_HISTORY_SORT,
 ) -> dict[str, Any]:
     """
     Histórico de la zona: resumen por periodo y eventos de los años anteriores.
+
+    Cada periodo lleva ``severity``: recuento de sus incendios por nivel (``low`` … ``extreme``,
+    ``none`` si no se pudo calcular).
 
     Returns
     -------
@@ -645,9 +720,8 @@ def fetch_history(
     """
     sql, params = history_summary_query(bbox, periods)
     totals = {row["label"]: row for row in connection.execute(sql, params).fetchall()}
-    sql, params = history_events_query(bbox, periods, limit)
+    sql, params = history_events_query(bbox, periods, limit, sort)
     rows = connection.execute(sql, params).fetchall()
-
     summary = []
     for period in periods:
         row = totals.get(period.label, {})
@@ -660,6 +734,11 @@ def fetch_history(
                 "events": int(row.get("events") or 0),
                 "detections": int(row.get("detections") or 0),
                 "frp_max_mw": _round(row.get("frp_max"), 2),
+                "severity": {
+                    level: int(row[f"sev_{level}"])
+                    for level in (*SEVERITY_LEVELS, "none")
+                    if row.get(f"sev_{level}")
+                },
             }
         )
 
@@ -684,7 +763,7 @@ def yearly_query(filters: Filters) -> Query:
     Necesita ``day_window``; ``bbox`` y ``source`` son opcionales. No usa ``limit``.
     """
     if filters.day_window is None:
-        raise ValueError("yearly_query necesita day_window")
+        raise ValueError("yearly_query needs day_window")
 
     where, params = _where(
         filters,
@@ -739,7 +818,7 @@ DEFAULT_EVENT_DETECTIONS = 2000
 EVENT_DETAIL_SQL = (
     "SELECT e.event_id, e.status, e.first_detection, e.last_detection, e.n_detections, "
     f"e.sensors, e.frp_max, e.biomass_max_kg_s, {EVENT_STATS_SQL}, e.confidence_fused, "
-    f"e.hull_area_m2 / {M2_PER_KM2} AS footprint_area_km2, "
+    f"e.hull_area_m2 / {M2_PER_KM2} AS footprint_area_km2, {EVENT_LAND_COVER_SQL}, "
     f"ST_AsGeoJSON(e.geom_hull, {COORD_DECIMALS})::json AS geometry "
     "FROM fire.fire_events e WHERE e.event_id = %s"
 )
@@ -797,7 +876,7 @@ COUNTRY_SIMPLIFY_DEG = 0.02
 COUNTRY_COORD_DECIMALS = 3
 
 COUNTRIES_SQL = (
-    "SELECT c.code, coalesce(c.name_es, c.name) AS name, c.continent, "
+    "SELECT c.code, c.name AS name, c.continent, "
     "EXISTS (SELECT 1 FROM fire.detections d WHERE d.is_valid AND d.geom_point && c.geom "
     "AND ST_Intersects(c.geom, d.geom_point)) AS has_data, "
     f"ST_AsGeoJSON(ST_SimplifyPreserveTopology(c.geom, {COUNTRY_SIMPLIFY_DEG}), "

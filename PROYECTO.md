@@ -215,6 +215,10 @@ Se abre en el navegador (`http://localhost:5173`) y ocupa toda la pantalla. Perm
 - **Ver los incendios y las detecciones** sobre el mapa de España. Los incendios se distinguen en
   activos y cerrados; las detecciones, por su intensidad (baja, media, alta). Al alejarse se ven
   como puntos; al acercarse mucho, como el **píxel real** que vio el satélite.
+- **Filtrar por tipo de parcela**: la leyenda tiene un grupo "Land type" (cultivo, forestal, matorral,
+  pastizal, urbano…, o sin datos) para ocultar o mostrar los incendios y detecciones según el uso
+  del suelo (SIGPAC) donde ocurren. Un fuego en el límite de varias parcelas cuenta como todas sus
+  clases: sigue visible mientras alguna de ellas esté activa.
 - **Filtrar por fechas**, con atajos como "última semana", "último mes", "último año" o "todas las
   fechas", o un rango a medida.
 - **Panel de actividad reciente**: una lista plegable con los últimos incendios. Al pulsar uno, el
@@ -224,7 +228,12 @@ Se abre en el navegador (`http://localhost:5173`) y ocupa toda la pantalla. Perm
     fechas elegidas.
   - *Incendios de los últimos 10 años*: los que hubo **en esa misma zona y en esas
     mismas fechas del año** en cada uno de los diez años anteriores (incluidos los años sin
-    ninguno). Sirve para responder a "¿esto es normal aquí en esta época?".
+    ninguno). Sirve para responder a "¿esto es normal aquí en esta época?". No son solo los
+    graves: cada incendio lleva su **severidad** (leve, moderado, grave, muy grave; orientativa,
+    según la biomasa quemada estimada o, si falta, el FRP máximo) y su **tipo de zona**
+    (cobertura del suelo más frecuente). El gráfico por años es apilado por severidad y sirve de
+    filtro por año; la barra de herramientas permite filtrar por año y severidad y ordenar por más
+    grave, más reciente o con más detecciones.
   - *Acercar a la zona* y *Quitar selección*.
 - **Una página de fichas** que se abre desde los resultados de una zona: una tarjeta por incendio
   con su propio minimapa (contorno y píxeles), fechas, número de detecciones, intensidad máxima,

@@ -55,6 +55,17 @@ GEOMETRY_COLUMNS = frozenset({"geom_point", "geom_footprint", "geom_centroid", "
 JSON_COLUMNS = frozenset({"frp_series", "merged_event_ids", "params"})
 
 
+# Tipo de zona de cada incendio (cobertura del suelo más frecuente de sus detecciones), en una sola
+# pasada agrupada: la API lo lee de la columna en vez de calcularlo para cada incendio.
+EVENT_LAND_COVER_STATEMENT = (
+    f"UPDATE {SCHEMA}.fire_events e SET land_cover = s.land_cover FROM ("
+    "SELECT ed.event_id, mode() WITHIN GROUP (ORDER BY d.land_cover) AS land_cover "
+    f"FROM {SCHEMA}.event_detections ed "
+    f"JOIN {SCHEMA}.detections d ON d.detection_id = ed.detection_id AND d.land_cover IS NOT NULL "
+    "GROUP BY ed.event_id) s WHERE e.event_id = s.event_id"
+)
+
+
 class _Cursor(Protocol):
     def execute(self, query: str) -> Any: ...
 
@@ -223,6 +234,7 @@ def execute_plan(connection: _Connection, plan: Sequence[TableLoad], srid: int) 
                 done = min(start + INSERT_CHUNK_ROWS, total)
                 if total > INSERT_CHUNK_ROWS and done < total:
                     LOGGER.info("  %s: %s of %s rows", load.table, f"{done:,}", f"{total:,}")
+        cursor.execute(EVENT_LAND_COVER_STATEMENT)
 
     return {load.table: len(load.rows) for load in plan}
 
@@ -291,3 +303,4 @@ def iter_statements(plan: Sequence[TableLoad], srid: int) -> Iterator[str]:
     yield truncate_statement()
     for load in plan:
         yield insert_statement(load, srid)
+    yield EVENT_LAND_COVER_STATEMENT

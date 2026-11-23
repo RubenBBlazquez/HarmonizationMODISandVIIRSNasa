@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Incendios · Siachi</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2714%27 fill=%27%231e4f93%27/%3E%3Ccircle cx=%2722%27 cy=%2711%27 r=%275%27 fill=%27%23e2603a%27/%3E%3C/svg%3E">
+  <title>Fires · Siachi</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
@@ -26,13 +27,13 @@
 </head>
 <body>
   <main>
-    <a class="back" href="/">← Volver al mapa</a>
-    <h1 id="page-title">Incendios</h1>
+    <a class="back" href="/">← Back to the map</a>
+    <h1 id="page-title">Fires</h1>
     <p class="criteria" id="criteria"></p>
     <p class="help" id="help"></p>
-    <p class="status" id="status">Cargando…</p>
+    <p class="status" id="status">Loading…</p>
     <div class="history" id="history" hidden></div>
-    <section class="grid" id="grid" aria-label="Incendios"></section>
+    <section class="grid" id="grid" aria-label="Fires"></section>
   </main>
   <script type="module" src="/src/fires.ts"></script>
 </body>
