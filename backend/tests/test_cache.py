@@ -52,3 +52,15 @@ def test_cache_clear_forces_a_new_computation():
     cache.get_or_compute("a", lambda: calls.append(1))
 
     assert len(calls) == 2
+
+
+def test_warm_caches_never_raises_when_the_database_is_down(monkeypatch):
+    from backend.api import routes
+
+    def broken_connection():
+        raise OSError("database not ready")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(routes, "get_connection", broken_connection)
+
+    routes.warm_caches()  # no lanza: la API arranca igual
