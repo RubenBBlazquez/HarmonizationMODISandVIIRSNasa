@@ -1,7 +1,7 @@
 // Gestos que dibujan la zona: arrastrar con el botón activo o con Ctrl pulsado (escritorio), y con
 // el dedo tras una pulsación larga (móvil). El arrastre se sigue en `document`, no en el mapa: si el
 // cursor pasa por un panel o se suelta fuera del mapa, la selección no queda a medias.
-import type maplibregl from "maplibre-gl";
+import type * as maplibregl from "maplibre-gl";
 
 import { isMobile } from "../../../lib/responsive.js";
 import { map } from "../../map/map.js";
