@@ -1393,6 +1393,7 @@ document.addEventListener("keydown", (event) => {
 let selecting = false;
 let anchor: maplibregl.LngLat | null = null;
 let menuPopup: maplibregl.Popup | null = null;
+let selectedBounds: Bounds | null = null; // zona dibujada (sigue en el mapa aunque el menú se cierre)
 
 function boundsOf(a: maplibregl.LngLat, b: maplibregl.LngLat): Bounds {
   return {
@@ -1425,12 +1426,14 @@ function drawSelection(bounds: Bounds | null): void {
 }
 
 function closeMenu(): void {
-  menuPopup?.remove();
-  menuPopup = null;
+  const popup = menuPopup;
+  menuPopup = null; // antes de remove(): su evento "close" no debe borrar la zona
+  popup?.remove();
 }
 
 function clearSelection(): void {
   closeMenu();
+  selectedBounds = null;
   drawSelection(null);
 }
 
@@ -1476,18 +1479,29 @@ function openSelectionMenu(bounds: Bounds): void {
     <button type="button" data-action="clear">Clear selection</button>`;
   element.querySelectorAll<HTMLButtonElement>("button[data-action]").forEach((button) =>
     button.addEventListener("click", () => {
-      closeMenu();
+      // El histórico se abre encima y el menú se queda: al volver sigue a mano "Clear selection".
       if (button.dataset.action === "history") void showHistory(bounds);
       else clearSelection();
     }),
   );
   closeMenu();
+  selectedBounds = bounds;
   // closeOnClick: false -> el clic que termina el arrastre no cierra el menú nada más abrirlo.
-  menuPopup = new maplibregl.Popup({ closeOnClick: false, maxWidth: "280px" })
+  const popup = new maplibregl.Popup({ closeOnClick: false, maxWidth: "280px" })
     .setLngLat([(bounds.west + bounds.east) / 2, (bounds.south + bounds.north) / 2])
     .setDOMContent(element)
     .addTo(map);
+  // La ✕ del menú quita también el recuadro (el menú es la zona seleccionada).
+  popup.on("close", () => {
+    if (menuPopup === popup) clearSelection();
+  });
+  menuPopup = popup;
 }
+
+// Tocar el recuadro de una zona sin menú (p. ej. tras cerrar el histórico) vuelve a abrirlo.
+map.on("click", "selection-fill", () => {
+  if (!selecting && !menuPopup && selectedBounds) openSelectionMenu(selectedBounds);
+});
 
 function setSelecting(active: boolean): void {
   selecting = active;
