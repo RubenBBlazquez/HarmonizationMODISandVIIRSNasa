@@ -3,7 +3,10 @@
 // mes y año. Cada elección se aplica al momento y `Esc` deshace la última (con la historia vacía,
 // cierra el calendario). Cada calendario solo cambia su propia fecha: en Inicio se deshabilitan los
 // días posteriores al fin, y en Fin los anteriores al inicio. Fechas "AAAA-MM-DD" (UTC).
-import "./dateRange.css";
+import "./dateRangePicker.css";
+
+import { addDays, formatDay, isoFromParts, todayIso } from "../../lib/dates.js";
+import { ICONS } from "../icons.js";
 
 export interface DateRange {
   start: string;
@@ -47,32 +50,6 @@ const PRESETS: Preset[] = [
 const PANEL_LABELS: Record<Panel, string> = { start: "Start", end: "End" };
 const PANELS: Panel[] = ["start", "end"];
 const FALLBACK_FIRST_YEAR = 2000;
-// Icono propio (SVG): algunos tipos de letra no pintan bien el emoji del calendario.
-const CALENDAR_ICON =
-  '<svg class="date-range-icon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
-  '<rect x="1.5" y="3" width="13" height="11.5" rx="2" fill="none" stroke="currentColor" ' +
-  'stroke-width="1.4"/><path d="M1.5 6.5h13M5 1.5v3M11 1.5v3" stroke="currentColor" ' +
-  'stroke-width="1.4" stroke-linecap="round"/></svg>';
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function isoFromParts(year: number, month: number, day: number): string {
-  return new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
-}
-
-/** Suma (o resta) días a una fecha "AAAA-MM-DD". */
-export function addDays(iso: string, days: number): string {
-  const date = new Date(`${iso}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function displayDay(iso: string): string {
-  const [year, month, day] = iso.split("-");
-  return `${day}-${month}-${year}`;
-}
 
 export class DateRangePicker {
   private readonly root: HTMLDivElement;
@@ -181,9 +158,9 @@ export class DateRangePicker {
 
   private updateLabel(): void {
     const text = this.range
-      ? `${displayDay(this.range.start)} → ${displayDay(this.range.end)}`
+      ? `${formatDay(this.range.start)} → ${formatDay(this.range.end)}`
       : "All dates";
-    this.toggle.innerHTML = `${CALENDAR_ICON}<span>${text}</span>`;
+    this.toggle.innerHTML = `${ICONS.dateRange}<span>${text}</span>`;
   }
 
   private yearOptions(): number[] {
@@ -215,7 +192,7 @@ export class DateRangePicker {
       const disabled = this.isDisabled(iso, panel) ? "disabled" : "";
       cells.push(
         `<button type="button" class="${classes.join(" ")}" data-panel="${panel}" ` +
-          `data-day="${iso}" aria-label="${displayDay(iso)}" ${disabled}>${day}</button>`,
+          `data-day="${iso}" aria-label="${formatDay(iso)}" ${disabled}>${day}</button>`,
       );
     }
 
@@ -231,7 +208,7 @@ export class DateRangePicker {
     return `
       <section class="date-range-panel" aria-label="${PANEL_LABELS[panel]}">
         <div class="date-range-panel-title"><small>${PANEL_LABELS[panel]}</small>
-          <b>${displayDay(this.draft[panel])}</b></div>
+          <b>${formatDay(this.draft[panel])}</b></div>
         <div class="date-range-head">
           <button type="button" class="nav" data-panel="${panel}" data-step="-1"
             aria-label="Previous month">‹</button>

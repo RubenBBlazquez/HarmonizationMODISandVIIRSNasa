@@ -16,7 +16,8 @@ export default defineConfig({
       "/api": { target: apiTarget, changeOrigin: true },
     },
   },
-  // Dos páginas: el mapa con el globo (index.html) y la pestaña de incendios (fires.html).
+  // Dos páginas: el mapa con el globo (index.html → src/pages/globe.ts) y la pestaña de incendios
+  // (fires.html → src/pages/fires.ts).
   build: {
     rollupOptions: {
       input: {
