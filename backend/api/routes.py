@@ -18,6 +18,13 @@ GEOJSON_MEDIA_TYPE = "application/geo+json"
 YEARLY_CACHE_TTL_S = 3600  # los datos solo cambian cuando corre el ETL
 _yearly_cache = TTLCache(YEARLY_CACHE_TTL_S)
 COUNTRIES_CACHE_TTL_S = 3600
+SUMMARY_CACHE_TTL_S = 300
+_summary_cache = TTLCache(SUMMARY_CACHE_TTL_S, max_entries=1)
+HISTORY_CACHE_TTL_S = 600
+_history_cache = TTLCache(HISTORY_CACHE_TTL_S, max_entries=64)
+# El navegador reutiliza durante unos minutos lo ya descargado (recargar la página no repite las
+# consultas grandes). Los datos solo cambian cuando corre el ETL.
+BROWSER_CACHE_S = 300
 _countries_cache = TTLCache(COUNTRIES_CACHE_TTL_S, max_entries=1)
 
 router = APIRouter(prefix="/api", tags=["fires"])
@@ -28,29 +35,29 @@ Connection = Annotated[psycopg.Connection, Depends(get_connection)]
 def get_filters(
     bbox: Annotated[
         str | None,
-        Query(description="Recuadro minLon,minLat,maxLon,maxLat (EPSG:4326)."),
+        Query(description="Box minLon,minLat,maxLon,maxLat (EPSG:4326)."),
     ] = None,
-    start: Annotated[date | None, Query(description="Desde (UTC, incluida).")] = None,
-    end: Annotated[date | None, Query(description="Hasta (UTC, incluida).")] = None,
+    start: Annotated[date | None, Query(description="From (UTC, inclusive).")] = None,
+    end: Annotated[date | None, Query(description="To (UTC, inclusive).")] = None,
     source: Annotated[Literal["MODIS", "VIIRS"] | None, Query()] = None,
     frp_category: Annotated[
         Literal["low", "medium", "high"] | None,
-        Query(description="Solo detecciones."),
+        Query(description="Detections only."),
     ] = None,
     limit: Annotated[int, Query(ge=1, le=queries.MAX_LIMIT)] = queries.DEFAULT_LIMIT,
     country: Annotated[
         str | None,
         Query(
             pattern=r"^[A-Z0-9]{3}$",
-            description="País (código ADM0_A3 de /countries: ESP, PRT...).",
+            description="Country (ADM0_A3 code from /countries: ESP, PRT...).",
         ),
     ] = None,
     all_years: Annotated[
         bool,
         Query(
             description=(
-                "Devuelve las mismas fechas del rango start-end en todos los años "
-                "(necesita start y end)."
+                "Returns the same dates of the start-end range in every year "
+                "(needs start and end)."
             )
         ),
     ] = False,
@@ -64,12 +71,12 @@ def get_filters(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     if start is not None and end is not None and start > end:
-        raise HTTPException(status_code=422, detail="start no puede ser posterior a end")
+        raise HTTPException(status_code=422, detail="start cannot be later than end")
 
     window = None
     if all_years:
         if start is None or end is None:
-            raise HTTPException(status_code=422, detail="all_years necesita start y end")
+            raise HTTPException(status_code=422, detail="all_years needs start and end")
 
         window = queries.day_window(start, end)
 
@@ -81,8 +88,12 @@ def get_filters(
 FiltersDep = Annotated[queries.Filters, Depends(get_filters)]
 
 
-def _geojson(content: dict[str, Any]) -> JSONResponse:
-    return JSONResponse(content, media_type=GEOJSON_MEDIA_TYPE)
+def _geojson(content: dict[str, Any], max_age: int | None = None) -> JSONResponse:
+    response = JSONResponse(content, media_type=GEOJSON_MEDIA_TYPE)
+    if max_age:
+        response.headers["Cache-Control"] = f"public, max-age={max_age}"
+
+    return response
 
 
 @router.get("/health")
@@ -96,14 +107,14 @@ def health(connection: Connection) -> dict[str, str]:
 @router.get("/summary")
 def summary(connection: Connection) -> dict[str, Any]:
     """Recuentos y rango de fechas de los datos válidos (para inicializar el mapa)."""
-    return queries.fetch_summary(connection)
+    return _summary_cache.get_or_compute("summary", lambda: queries.fetch_summary(connection))
 
 
 @router.get("/activity")
 def activity(
     connection: Connection,
     limit: Annotated[
-        int, Query(ge=1, le=queries.MAX_ACTIVITY_LIMIT, description="Máximo de incendios.")
+        int, Query(ge=1, le=queries.MAX_ACTIVITY_LIMIT, description="Maximum number of fires.")
     ] = queries.DEFAULT_ACTIVITY_LIMIT,
 ) -> dict[str, Any]:
     """Actividad reciente: los últimos incendios (por detección más reciente), con su posición."""
@@ -128,7 +139,9 @@ def detections(
     """
     query = queries.detections_query(filters, geometry)
 
-    return _geojson(queries.fetch_collection(connection, query, queries.detection_feature))
+    return _geojson(
+        queries.fetch_collection(connection, query, queries.detection_feature), BROWSER_CACHE_S
+    )
 
 
 @router.get("/countries")
@@ -151,15 +164,19 @@ def countries(connection: Connection) -> JSONResponse:
 @router.get("/history")
 def history(
     connection: Connection,
-    bbox: Annotated[str, Query(description="Zona minLon,minLat,maxLon,maxLat (EPSG:4326).")],
-    start: Annotated[date, Query(description="Inicio del periodo de referencia (incluido).")],
-    end: Annotated[date, Query(description="Fin del periodo de referencia (incluido).")],
+    bbox: Annotated[str, Query(description="Zone minLon,minLat,maxLon,maxLat (EPSG:4326).")],
+    start: Annotated[date, Query(description="Start of the reference period (inclusive).")],
+    end: Annotated[date, Query(description="End of the reference period (inclusive).")],
     years: Annotated[
-        int, Query(ge=1, le=queries.MAX_HISTORY_YEARS, description="Años anteriores a comparar.")
+        int, Query(ge=1, le=queries.MAX_HISTORY_YEARS, description="Previous years to compare.")
     ] = queries.DEFAULT_HISTORY_YEARS,
     limit: Annotated[
-        int, Query(ge=1, le=queries.MAX_HISTORY_LIMIT, description="Máximo de eventos.")
+        int, Query(ge=1, le=queries.MAX_HISTORY_LIMIT, description="Maximum number of events.")
     ] = queries.DEFAULT_HISTORY_LIMIT,
+    sort: Annotated[
+        Literal["severity", "recent", "detections"],
+        Query(description="Order of the returned events (the most severe, latest or largest first)."),
+    ] = "severity",
 ) -> dict[str, Any]:
     """
     Incendios de años anteriores de una zona: los de la **misma zona** y las **mismas fechas del año**
@@ -174,7 +191,10 @@ def history(
     except (queries.InvalidBBoxError, queries.InvalidPeriodError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
-    return queries.fetch_history(connection, parsed_bbox, periods, limit)
+    key = (parsed_bbox, start, end, years, limit, sort)
+    return _history_cache.get_or_compute(
+        key, lambda: queries.fetch_history(connection, parsed_bbox, periods, limit, sort)
+    )
 
 
 @router.get("/yearly")
@@ -192,7 +212,7 @@ def yearly(
     zona, fuente y país (no por año, así que 12-18 ago de 2024 y de 2025 comparten entrada).
     """
     if filters.start is None or filters.end is None:
-        raise HTTPException(status_code=422, detail="yearly necesita start y end")
+        raise HTTPException(status_code=422, detail="yearly needs start and end")
 
     window = queries.day_window(filters.start, filters.end)
     key = (window, filters.bbox, filters.source, filters.country)
@@ -209,7 +229,7 @@ def event_detail(
     event_id: str,
     connection: Connection,
     limit: Annotated[
-        int, Query(ge=1, le=queries.MAX_LIMIT, description="Máximo de detecciones.")
+        int, Query(ge=1, le=queries.MAX_LIMIT, description="Maximum number of detections.")
     ] = queries.DEFAULT_EVENT_DETECTIONS,
 ) -> dict[str, Any]:
     """
@@ -218,7 +238,7 @@ def event_detail(
     """
     detail = queries.fetch_event_detail(connection, event_id, limit)
     if detail is None:
-        raise HTTPException(status_code=404, detail=f"No existe el evento {event_id}")
+        raise HTTPException(status_code=404, detail=f"Event not found: {event_id}")
 
     return detail
 
@@ -230,7 +250,7 @@ def events(
     geometry: Annotated[Literal["point", "area"], Query()] = "point",
     match: Annotated[
         Literal["intersects", "inside"],
-        Query(description="intersects: la envolvente toca; inside: hay detecciones dentro."),
+        Query(description="intersects: the hull touches; inside: there are detections inside."),
     ] = "intersects",
 ) -> JSONResponse:
     """
@@ -243,8 +263,10 @@ def events(
     La huella (``footprint_area_km2``) no es superficie quemada.
     """
     if match == "inside" and filters.bbox is None:
-        raise HTTPException(status_code=422, detail="match=inside necesita bbox")
+        raise HTTPException(status_code=422, detail="match=inside needs bbox")
 
     query = queries.events_query(filters, geometry, match)
 
-    return _geojson(queries.fetch_collection(connection, query, queries.event_feature))
+    return _geojson(
+        queries.fetch_collection(connection, query, queries.event_feature), BROWSER_CACHE_S
+    )
