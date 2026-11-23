@@ -14,6 +14,10 @@ import { BASE_STYLE } from "./baseStyle.js";
 // latitud, así que el zoom mínimo se calcula midiendo el globo, no con un número fijo.
 const MIN_ZOOM_REFERENCE_LAT = 35;
 const GLOBE_FILL = 0.96;
+// Densidad de píxeles máxima del lienzo. En pantallas HiDPI/4K el lienzo a resolución nativa
+// multiplica el trabajo de WebGL (el globo se redibuja entero en cada fotograma) sin que se note
+// en unas imágenes de satélite que ya vienen ampliadas.
+const MAX_PIXEL_RATIO = 1.5;
 
 maplibregl.setWorkerUrl(workerUrl);
 
@@ -23,10 +27,15 @@ export const map = new maplibregl.Map({
   center: INITIAL_VIEW.center,
   zoom: INITIAL_VIEW.zoom,
   attributionControl: { compact: true },
+  pixelRatio: Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO),
   boxZoom: false, // Mayús fija tooltips y Ctrl selecciona zona: el zoom por recuadro sobra
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
 map.on("style.load", () => map.setProjection({ type: "globe" }));
+// Mientras el mapa se mueve, el CSS pausa las animaciones que hay sobre él (pulso de los incendios
+// activos): así el navegador no las repinta a la vez que el mapa en cada fotograma.
+map.on("movestart", () => map.getContainer().classList.add("map-moving"));
+map.on("moveend", () => map.getContainer().classList.remove("map-moving"));
 // Se crea ya para no perder el evento si llega antes de que lo esperemos.
 export const mapLoaded = new Promise<void>((resolve) => map.once("load", () => resolve()));
 

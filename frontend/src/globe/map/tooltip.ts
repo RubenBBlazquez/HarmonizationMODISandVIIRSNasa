@@ -11,8 +11,10 @@ let tipContent: { html: string; lngLat: maplibregl.LngLat } | null = null;
 const pinnedTips: maplibregl.Popup[] = [];
 
 export function showTip(html: string, lngLat: maplibregl.LngLat): void {
+  // El HTML solo se reconstruye si cambia: al mover el ratón sobre lo mismo basta con moverlo.
+  if (tipContent?.html !== html || !tip.isOpen()) tip.setHTML(html).addTo(map);
+  tip.setLngLat(lngLat);
   tipContent = { html, lngLat };
-  tip.setLngLat(lngLat).setHTML(html).addTo(map);
 }
 
 export function hideTip(): void {

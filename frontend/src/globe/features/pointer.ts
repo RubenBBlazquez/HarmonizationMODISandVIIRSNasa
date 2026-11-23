@@ -26,30 +26,53 @@ function featureAt(point: maplibregl.PointLike): {
   return { kind, feature };
 }
 
+/**
+ * Ratón sobre el mapa. Se atiende como mucho una vez por fotograma (el último movimiento) y no
+ * mientras el mapa se mueve: buscar qué hay bajo el cursor recorre todas las detecciones visibles,
+ * y hacerlo en cada evento durante un zoom o un arrastre restaba fotogramas al mapa.
+ */
+function onPointerMove(event: maplibregl.MapMouseEvent): void {
+  ui.coordinates.innerHTML =
+    `Latitude: <b>${event.lngLat.lat.toFixed(5)}°</b><br>` +
+    `Longitude: <b>${event.lngLat.lng.toFixed(5)}°</b>`;
+  if (state.selecting) return;
+  if (map.isMoving()) {
+    hideTip();
+    return;
+  }
+  const hit = featureAt(event.point);
+  const code = hit?.kind === "country" ? String(hit.feature.properties.code) : null;
+  const otherCountry = code !== null && code !== state.selectedCode;
+  map.getCanvas().style.cursor = hit && (hit.kind !== "country" || otherCountry) ? "pointer" : "";
+  setHoveredCountry(otherCountry ? code : null);
+  const properties = hit?.feature.properties as Properties | undefined;
+  const html =
+    hit?.kind === "detection"
+      ? detectionTooltip(properties!)
+      : otherCountry
+        ? `<b>${escapeHtml(properties!.name)}</b>${properties!.has_data ? " · has data" : ""}` +
+          "<br>Click to see its fires"
+        : null;
+  if (html) showTip(html, event.lngLat);
+  else hideTip();
+}
+
 export function initPointer(): void {
+  // Último movimiento aún sin atender (se atiende en el siguiente fotograma).
+  let pending: maplibregl.MapMouseEvent | null = null;
   map.on("mousemove", (event) => {
-    ui.coordinates.innerHTML =
-      `Latitude: <b>${event.lngLat.lat.toFixed(5)}°</b><br>` +
-      `Longitude: <b>${event.lngLat.lng.toFixed(5)}°</b>`;
-    if (state.selecting) return;
-    const hit = featureAt(event.point);
-    const code = hit?.kind === "country" ? String(hit.feature.properties.code) : null;
-    const otherCountry = code !== null && code !== state.selectedCode;
-    map.getCanvas().style.cursor = hit && (hit.kind !== "country" || otherCountry) ? "pointer" : "";
-    setHoveredCountry(otherCountry ? code : null);
-    const properties = hit?.feature.properties as Properties | undefined;
-    const html =
-      hit?.kind === "detection"
-        ? detectionTooltip(properties!)
-        : otherCountry
-          ? `<b>${escapeHtml(properties!.name)}</b>${properties!.has_data ? " · has data" : ""}` +
-            "<br>Click to see its fires"
-          : null;
-    if (html) showTip(html, event.lngLat);
-    else hideTip();
+    if (!pending) {
+      requestAnimationFrame(() => {
+        const last = pending;
+        pending = null;
+        if (last) onPointerMove(last);
+      });
+    }
+    pending = event;
   });
 
   map.on("mouseout", () => {
+    pending = null;
     hideTip();
     setHoveredCountry(null);
   });

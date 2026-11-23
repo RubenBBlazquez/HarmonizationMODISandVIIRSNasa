@@ -52,12 +52,28 @@ const hoveredState: ExpressionSpecification = ["boolean", ["feature-state", "hov
 const hasData: ExpressionSpecification = ["boolean", ["get", "has_data"], false];
 const pointStroke: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 4, 0, 7, 0.5];
 
+// Zoom máximo al que MapLibre trocea cada fuente GeoJSON (por defecto, 18). Al acercarse, el worker
+// vuelve a trocear la fuente en cada nivel entero hasta ese máximo; con decenas de miles de
+// detecciones eso es lo que daba tirones al hacer zoom. Por encima se reutilizan (ampliadas) las
+// teselas del máximo, con precisión de sobra: una tesela tiene 8192 unidades de lado, así que a
+// zoom 8 cada unidad son ~20 m (las detecciones miden 375 m o 1 km) y a zoom 6 ~75 m (fronteras).
+const SOURCE_MAX_ZOOM = {
+  countries: 6,
+  points: 8, // puntos y eventos: la capa de puntos se ve solo hasta PIXEL_MIN_ZOOM
+  pixels: PIXEL_MIN_ZOOM + 2,
+};
+
 /** Crea las fuentes (vacías) y las capas, de abajo arriba. Se llama una vez, con el mapa cargado. */
 export function addLayers(): void {
-  map.addSource("countries", { type: "geojson", data: EMPTY, promoteId: "code" });
-  map.addSource("detections", { type: "geojson", data: EMPTY });
-  map.addSource("pixels", { type: "geojson", data: EMPTY });
-  map.addSource("events", { type: "geojson", data: EMPTY });
+  map.addSource("countries", {
+    type: "geojson",
+    data: EMPTY,
+    promoteId: "code",
+    maxzoom: SOURCE_MAX_ZOOM.countries,
+  });
+  map.addSource("detections", { type: "geojson", data: EMPTY, maxzoom: SOURCE_MAX_ZOOM.points });
+  map.addSource("pixels", { type: "geojson", data: EMPTY, maxzoom: SOURCE_MAX_ZOOM.pixels });
+  map.addSource("events", { type: "geojson", data: EMPTY, maxzoom: SOURCE_MAX_ZOOM.points });
   map.addSource("selection", { type: "geojson", data: EMPTY });
 
   map.addLayer({

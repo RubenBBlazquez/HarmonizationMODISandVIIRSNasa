@@ -148,7 +148,9 @@ body.activity-open .legend-control, body.activity-open .maplibregl-ctrl-top-righ
 /* Marcador de incendio activo (MapLibre usa el elemento tal cual: necesita su tamaño). */
 /* Sin `position`: MapLibre coloca el marcador con position:absolute + transform; cambiarlo lo
    saca de su coordenada (las alertas aparecían apiladas en el mar). */
-.active-zone-marker { width: 44px; height: 44px; cursor: pointer; }
+/* `will-change`: capa propia en la GPU, para que MapLibre lo mueva en cada fotograma sin repintarlo. */
+.active-zone-marker { width: 44px; height: 44px; cursor: pointer; will-change: transform; }
+.map-moving .active-zone-pulse { animation-play-state: paused; }
 /* Tooltip fijado con Shift. */
 .globe-tip.pinned .maplibregl-popup-content { box-shadow: 0 0 0 2px #2f5d43, 0 2px 8px #0004; }
 
